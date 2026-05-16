@@ -5,8 +5,31 @@ from datetime import datetime, timedelta
 import io
 import time
 
+import json
+import os
+
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
+
+FBO_FILE = "/tmp/wb_fbo_data.json"
+
+def load_fbo_all():
+    """Барлық FBO деректерін файлдан оқу"""
+    try:
+        if os.path.exists(FBO_FILE):
+            with open(FBO_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_fbo_all(data):
+    """Барлық FBO деректерін файлға сақтау"""
+    try:
+        with open(FBO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        st.warning(f"FBO сақталмады: {e}")
 
 # ──────────────────────────────────────────────
 # ШЫҒ / КІРУ
@@ -254,9 +277,11 @@ def show_store(store, df, filter_status, search):
     st.divider()
     st.markdown("#### 📊 Итоговый отчёт")
 
-    # FBO қолмен
+    # FBO деректерін файлдан оқу (барлық пайдаланушы үшін ортақ)
     fbo_key = f"fbo_{idx}"
-    fbo_data = st.session_state.get(fbo_key, {})
+    all_fbo = load_fbo_all()
+    fbo_data = all_fbo.get(str(idx), {})
+    st.session_state[fbo_key] = fbo_data
 
     result = dff[["supplierArticle", "qty", "in_way_client", "in_way_return", "daily_avg", "status"]].copy()
     result["FBO в пути"] = result["supplierArticle"].map(fbo_data).fillna(0).astype(int)
@@ -310,25 +335,32 @@ def show_store(store, df, filter_status, search):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"dl_{idx}")
 
-    st.divider()
-    st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
-    st.caption("Складқа баратын поставка данасын жазыңыз — жоғарыдағы кестеге қосылады")
+    # FBO енгізу — тек менеджерге көрінеді
+    role = st.session_state.get("role", "manager")
+    if role == "manager":
+        st.divider()
+        st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
+        st.caption("Складқа баратын поставка данасын жазыңыз — магазин иесі де FBO санын көреді")
 
-    fbo_tbl = dff[["supplierArticle"]].copy()
-    fbo_tbl.columns = ["Артикул"]
-    fbo_tbl["FBO в пути"] = fbo_tbl["Артикул"].map(fbo_data).fillna(0).astype(int)
+        fbo_tbl = dff[["supplierArticle"]].copy()
+        fbo_tbl.columns = ["Артикул"]
+        fbo_tbl["FBO в пути"] = fbo_tbl["Артикул"].map(fbo_data).fillna(0).astype(int)
 
-    fbo_edited = st.data_editor(
-        fbo_tbl, use_container_width=True, height=400, key=f"fbo_editor_{idx}",
-        column_config={
-            "Артикул":    st.column_config.TextColumn(disabled=True),
-            "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
-        }
-    )
-    new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
-    if new_fbo != fbo_data:
-        st.session_state[fbo_key] = new_fbo
-        st.rerun()
+        fbo_edited = st.data_editor(
+            fbo_tbl, use_container_width=True, height=400, key=f"fbo_editor_{idx}",
+            column_config={
+                "Артикул":    st.column_config.TextColumn(disabled=True),
+                "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
+            }
+        )
+        new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
+        if new_fbo != fbo_data:
+            # Файлға сақтау
+            all_fbo = load_fbo_all()
+            all_fbo[str(idx)] = new_fbo
+            save_fbo_all(all_fbo)
+            st.session_state[fbo_key] = new_fbo
+            st.rerun()
 
 # ──────────────────────────────────────────────
 # НЕГІЗГІ ИНТЕРФЕЙС
