@@ -224,7 +224,30 @@ def load_store_data(store):
         active = set()
         daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
 
-    # 3. Итог
+    # 3. Продажи за 30 дней (аналитика үшін)
+    sales30 = pd.DataFrame()
+    try:
+        with st.spinner(f"[{name}] Продажи 30 дней..."):
+            s30_raw = wb_get_retry(
+                "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
+                stats_key, {"dateFrom": days_ago_str(30), "flag": 0}, store_name=name
+            )
+            s30_df = pd.DataFrame(s30_raw) if s30_raw else pd.DataFrame()
+            if not s30_df.empty and "date" in s30_df.columns:
+                if "saleID" in s30_df.columns:
+                    s30_df = s30_df[~s30_df["saleID"].astype(str).str.startswith("R")]
+                s30_df["date"] = pd.to_datetime(s30_df["date"], errors="coerce").dt.date
+                s30_df["forPay"] = pd.to_numeric(s30_df.get("forPay", 0), errors="coerce").fillna(0)
+                sales30 = s30_df.groupby("date").agg(
+                    qty=("saleID", "count"),
+                    revenue=("forPay", "sum")
+                ).reset_index()
+                sales30.columns = ["Дата", "Продано (шт)", "Выручка (₸)"]
+                sales30 = sales30.sort_values("Дата")
+    except Exception as e:
+        errors.append(f"Аналитика: {e}")
+
+    # 4. Итог
     df = pd.DataFrame()
     if not agg.empty:
         df = agg.merge(daily, on="supplierArticle", how="left")
@@ -241,126 +264,169 @@ def load_store_data(store):
             df = df[df["supplierArticle"].isin(active)]
         df = df.reset_index(drop=True)
 
-    return df, errors
+    return df, sales30, errors
 
 # ──────────────────────────────────────────────
 # БІР МАГАЗИН КЕСТЕСІН КӨРСЕТУ
 # ──────────────────────────────────────────────
-def show_store(store, df, filter_status, search):
+def show_store(store, df, sales30, filter_status, search):
     idx = store["idx"]
 
     if df.empty:
         st.warning("Деректер жоқ немесе жүктелмеді")
         return
 
-    # Фильтр
-    dff = df.copy()
-    if filter_status == "Ноль":
-        dff = dff[dff["qty"] == 0]
-    elif filter_status == "Мало (1–200)":
-        dff = dff[(dff["qty"] >= 1) & (dff["qty"] <= 200)]
-    elif filter_status == "Хорошо (201–500)":
-        dff = dff[(dff["qty"] > 200) & (dff["qty"] <= 500)]
-    elif filter_status == "Достаточно (500+)":
-        dff = dff[dff["qty"] > 500]
-    if search:
-        dff = dff[dff["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
+    tab_ostatok, tab_analytic = st.tabs(["📦 Остатки", "📊 Аналитика — 30 күн"])
 
-    # Метрики
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("📦 Общий остаток", f"{int(df['total'].sum()):,} шт".replace(",", " "))
-    c2.metric("📊 Позиций", len(df))
-    c3.metric("🔴 Критические", int(df["turnover"].dropna().apply(lambda x: x <= 10).sum()),
-              help="Оборачиваемость ≤ 10 дней")
-    c4.metric("⚫ Ноль остаток", int((df["qty"] == 0).sum()))
+    with tab_analytic:
+        if sales30 is None or sales30.empty:
+            st.info("Продажа деректері жоқ")
+        else:
+            total_qty = int(sales30["Продано (шт)"].sum())
+            total_rev = sales30["Выручка (₸)"].sum()
+            avg_day = total_qty / 30
+            best_day = sales30.loc[sales30["Продано (шт)"].idxmax()]
 
-    st.divider()
-    st.markdown("#### 📊 Итоговый отчёт")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("📦 Жалпы сатылды", f"{total_qty:,} шт".replace(",", " "))
+            c2.metric("💰 Жалпы выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
+            c3.metric("📈 Күндік орта", f"{avg_day:.1f} шт")
+            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Продано (шт)']} шт")
 
-    # FBO деректерін файлдан оқу (барлық пайдаланушы үшін ортақ)
-    fbo_key = f"fbo_{idx}"
-    all_fbo = load_fbo_all()
-    fbo_data = all_fbo.get(str(idx), {})
-    st.session_state[fbo_key] = fbo_data
+            st.divider()
+            st.markdown("#### 📊 Күн бойынша сатылым (соңғы 30 күн)")
 
-    result = dff[["supplierArticle", "qty", "in_way_client", "in_way_return", "daily_avg", "status"]].copy()
-    result["FBO в пути"] = result["supplierArticle"].map(fbo_data).fillna(0).astype(int)
-    result["Общий остаток"] = result["qty"] + result["in_way_client"] + result["FBO в пути"]
-    result["Оборачиваемость"] = result.apply(
-        lambda r: round((r["qty"] + r["in_way_return"]) / r["daily_avg"])
-        if r["daily_avg"] > 0 else None, axis=1
-    )
-    result = result.rename(columns={
-        "supplierArticle": "Артикул",
-        "qty": "Остаток",
-        "in_way_client": "В пути к клиенту",
-        "daily_avg": "Ср. продаж/день",
-        "status": "Статус",
-    })
-    result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
-                     "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
+            chart_df = sales30.set_index("Дата")[["Продано (шт)"]]
+            st.bar_chart(chart_df, height=350)
 
-    def style_turn(val):
-        if pd.isna(val): return ""
-        return "background-color:#FCEBEB;color:#A32D2D;font-weight:bold" if val <= 10 else ""
+            st.markdown("#### 💰 Күн бойынша выручка (соңғы 30 күн)")
+            rev_df = sales30.set_index("Дата")[["Выручка (₸)"]]
+            st.line_chart(rev_df, height=250)
 
-    def style_stat(val):
-        m = {
-            "Ноль":       "background-color:#FCEBEB;color:#A32D2D",
-            "Мало":       "background-color:#FAEEDA;color:#854F0B",
-            "Хорошо":     "background-color:#EAF3DE;color:#3B6D11",
-            "Достаточно": "background-color:#E6F1FB;color:#185FA5",
-        }
-        return m.get(val, "")
+            st.divider()
+            st.markdown("#### 📋 Күнделікті кесте")
+            display30 = sales30.copy()
+            display30["Выручка (₸)"] = display30["Выручка (₸)"].round(0).astype(int)
+            st.dataframe(
+                display30.sort_values("Дата", ascending=False).reset_index(drop=True),
+                use_container_width=True,
+                height=400,
+                column_config={
+                    "Продано (шт)": st.column_config.NumberColumn(format="%d шт"),
+                    "Выручка (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                }
+            )
 
-    styled = result.style.map(style_turn, subset=["Оборачиваемость"]).map(style_stat, subset=["Статус"])
+    with tab_ostatok:
 
-    st.dataframe(styled, use_container_width=True, height=460,
-        column_config={
-            "Остаток":          st.column_config.NumberColumn(format="%d шт"),
-            "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
-            "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
-            "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
-            "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
-            "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
-        }
-    )
-    st.caption(f"Показано: {len(result)} позиций (с продажами за последние 20 дней)")
+        # Фильтр
+        dff = df.copy()
+        if filter_status == "Ноль":
+            dff = dff[dff["qty"] == 0]
+        elif filter_status == "Мало (1–200)":
+            dff = dff[(dff["qty"] >= 1) & (dff["qty"] <= 200)]
+        elif filter_status == "Хорошо (201–500)":
+            dff = dff[(dff["qty"] > 200) & (dff["qty"] <= 500)]
+        elif filter_status == "Достаточно (500+)":
+            dff = dff[dff["qty"] > 500]
+        if search:
+            dff = dff[dff["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        result.to_excel(writer, index=False, sheet_name="Отчёт WB")
-    st.download_button(f"⬇️ Excel жүктеу — {store['name']}", data=buf.getvalue(),
-        file_name=f"WB_{store['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"dl_{idx}")
+        # Метрики
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("📦 Общий остаток", f"{int(df['total'].sum()):,} шт".replace(",", " "))
+        c2.metric("📊 Позиций", len(df))
+        c3.metric("🔴 Критические", int(df["turnover"].dropna().apply(lambda x: x <= 10).sum()),
+                  help="Оборачиваемость ≤ 10 дней")
+        c4.metric("⚫ Ноль остаток", int((df["qty"] == 0).sum()))
 
-    # FBO енгізу — тек менеджерге көрінеді
-    role = st.session_state.get("role", "manager")
-    if role == "manager":
         st.divider()
-        st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
-        st.caption("Складқа баратын поставка данасын жазыңыз — магазин иесі де FBO санын көреді")
+        st.markdown("#### 📊 Итоговый отчёт")
 
-        fbo_tbl = dff[["supplierArticle"]].copy()
-        fbo_tbl.columns = ["Артикул"]
-        fbo_tbl["FBO в пути"] = fbo_tbl["Артикул"].map(fbo_data).fillna(0).astype(int)
+        # FBO деректерін файлдан оқу (барлық пайдаланушы үшін ортақ)
+        fbo_key = f"fbo_{idx}"
+        all_fbo = load_fbo_all()
+        fbo_data = all_fbo.get(str(idx), {})
+        st.session_state[fbo_key] = fbo_data
 
-        fbo_edited = st.data_editor(
-            fbo_tbl, use_container_width=True, height=400, key=f"fbo_editor_{idx}",
+        result = dff[["supplierArticle", "qty", "in_way_client", "in_way_return", "daily_avg", "status"]].copy()
+        result["FBO в пути"] = result["supplierArticle"].map(fbo_data).fillna(0).astype(int)
+        result["Общий остаток"] = result["qty"] + result["in_way_client"] + result["FBO в пути"]
+        result["Оборачиваемость"] = result.apply(
+            lambda r: round((r["qty"] + r["in_way_return"]) / r["daily_avg"])
+            if r["daily_avg"] > 0 else None, axis=1
+        )
+        result = result.rename(columns={
+            "supplierArticle": "Артикул",
+            "qty": "Остаток",
+            "in_way_client": "В пути к клиенту",
+            "daily_avg": "Ср. продаж/день",
+            "status": "Статус",
+        })
+        result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+                         "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
+
+        def style_turn(val):
+            if pd.isna(val): return ""
+            return "background-color:#FCEBEB;color:#A32D2D;font-weight:bold" if val <= 10 else ""
+
+        def style_stat(val):
+            m = {
+                "Ноль":       "background-color:#FCEBEB;color:#A32D2D",
+                "Мало":       "background-color:#FAEEDA;color:#854F0B",
+                "Хорошо":     "background-color:#EAF3DE;color:#3B6D11",
+                "Достаточно": "background-color:#E6F1FB;color:#185FA5",
+            }
+            return m.get(val, "")
+
+        styled = result.style.map(style_turn, subset=["Оборачиваемость"]).map(style_stat, subset=["Статус"])
+
+        st.dataframe(styled, use_container_width=True, height=460,
             column_config={
-                "Артикул":    st.column_config.TextColumn(disabled=True),
-                "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
+                "Остаток":          st.column_config.NumberColumn(format="%d шт"),
+                "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
+                "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
+                "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
+                "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
+                "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
             }
         )
-        new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
-        if new_fbo != fbo_data:
-            # Файлға сақтау
-            all_fbo = load_fbo_all()
-            all_fbo[str(idx)] = new_fbo
-            save_fbo_all(all_fbo)
-            st.session_state[fbo_key] = new_fbo
-            st.rerun()
+        st.caption(f"Показано: {len(result)} позиций (с продажами за последние 20 дней)")
+
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            result.to_excel(writer, index=False, sheet_name="Отчёт WB")
+        st.download_button(f"⬇️ Excel жүктеу — {store['name']}", data=buf.getvalue(),
+            file_name=f"WB_{store['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_{idx}")
+
+        # FBO енгізу — тек менеджерге көрінеді
+        role = st.session_state.get("role", "manager")
+        if role == "manager":
+            st.divider()
+            st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
+            st.caption("Складқа баратын поставка данасын жазыңыз — магазин иесі де FBO санын көреді")
+
+            fbo_tbl = dff[["supplierArticle"]].copy()
+            fbo_tbl.columns = ["Артикул"]
+            fbo_tbl["FBO в пути"] = fbo_tbl["Артикул"].map(fbo_data).fillna(0).astype(int)
+
+            fbo_edited = st.data_editor(
+                fbo_tbl, use_container_width=True, height=400, key=f"fbo_editor_{idx}",
+                column_config={
+                    "Артикул":    st.column_config.TextColumn(disabled=True),
+                    "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
+                }
+            )
+            new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
+            if new_fbo != fbo_data:
+                # Файлға сақтау
+                all_fbo = load_fbo_all()
+                all_fbo[str(idx)] = new_fbo
+                save_fbo_all(all_fbo)
+                st.session_state[fbo_key] = new_fbo
+                st.rerun()
 
 # ──────────────────────────────────────────────
 # НЕГІЗГІ ИНТЕРФЕЙС
@@ -411,8 +477,9 @@ if not stores:
 # Деректерді жүктеу
 if fetch_btn:
     for s in visible_stores:
-        df, errors = load_store_data(s)
+        df, sales30, errors = load_store_data(s)
         st.session_state[f"df_{s['idx']}"] = df
+        st.session_state[f"sales30_{s['idx']}"] = sales30
         for e in errors:
             st.warning(f"[{s['name']}] ⚠️ {e}")
     st.success("✅ Барлық магазин жүктелді!")
@@ -432,4 +499,6 @@ for i, (tab, store) in enumerate(zip(tabs, visible_stores)):
         if df_key not in st.session_state or st.session_state[df_key] is None:
             st.info(f"👈 **«Барлығын жүктеу»** батырмасын басыңыз")
         else:
-            show_store(store, st.session_state[df_key], filter_status, search)
+            sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
+            show_store(store, st.session_state[df_key], sales30, filter_status, search)
+            
