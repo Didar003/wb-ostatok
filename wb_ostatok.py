@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import io
+import time
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 
@@ -33,7 +34,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-def days_ago(n):
+def days_ago_str(n):
     return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT00:00:00")
 
 def wb_get(url, key, params={}):
@@ -41,41 +42,10 @@ def wb_get(url, key, params={}):
     r.raise_for_status()
     return r.json()
 
-def fetch_stocks(key):
-    return wb_get(
-        "https://statistics-api.wildberries.ru/api/v1/supplier/stocks",
-        key, {"dateFrom": "2019-01-01"}
-    )
-
-def fetch_sales(key, days):
-    return wb_get(
-        "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
-        key, {"dateFrom": days_ago(days), "flag": 0}
-    )
-
-def fetch_incomes(key):
-    return wb_get(
-        "https://statistics-api.wildberries.ru/api/v1/supplier/incomes",
-        key, {"dateFrom": days_ago(60)}
-    )
-
-def fetch_balance(key):
-    try:
-        r = requests.get(
-            "https://statistics-api.wildberries.ru/api/v1/supplier/balance",
-            headers={"Authorization": key}, timeout=30
-        )
-        if r.ok:
-            d = r.json()
-            return d.get("balance", None)
-    except:
-        pass
-    return None
-
 def status_label(q):
-    if q == 0:   return "Ноль"
-    if q <= 200: return "Мало"
-    if q <= 500: return "Хорошо"
+    if q == 0:    return "Ноль"
+    if q <= 200:  return "Мало"
+    if q <= 500:  return "Хорошо"
     return "Достаточно"
 
 with st.sidebar:
@@ -101,7 +71,7 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
 
-for k in ["df", "balance", "in_process", "total_stock"]:
+for k in ["df", "total_stock"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -114,80 +84,70 @@ if fetch_btn:
 
             # 1. Остатки
             try:
-                stocks_raw = fetch_stocks(api_key)
+                stocks_raw = wb_get(
+                    "https://statistics-api.wildberries.ru/api/v1/supplier/stocks",
+                    api_key, {"dateFrom": "2019-01-01"}
+                )
                 s_df = pd.DataFrame(stocks_raw)
                 agg = s_df.groupby("supplierArticle").agg(
                     name=("subject", "first"),
                     qty=("quantity", "sum"),
                     in_way_client=("inWayToClient", "sum"),
-                    in_way_return=("inWayFromClient", "sum"),
                 ).reset_index()
             except Exception as e:
                 errors.append(f"Остатки: {e}")
                 agg = pd.DataFrame()
 
-            # 2. Продажи за 7 дней (средние)
+            time.sleep(2)
+
+            # 2. Продажи за 20 дней — один запрос для двух целей
             try:
-                s7 = fetch_sales(api_key, 7)
-                s7_df = pd.DataFrame(s7) if s7 else pd.DataFrame()
-                if not s7_df.empty and "supplierArticle" in s7_df.columns:
-                    if "saleID" in s7_df.columns:
-                        s7_df = s7_df[~s7_df["saleID"].astype(str).str.startswith("R")]
-                    daily = s7_df.groupby("supplierArticle").size().div(7).reset_index()
+                sales_raw = wb_get(
+                    "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
+                    api_key, {"dateFrom": days_ago_str(20), "flag": 0}
+                )
+                sales_df = pd.DataFrame(sales_raw) if sales_raw else pd.DataFrame()
+
+                if not sales_df.empty and "supplierArticle" in sales_df.columns:
+                    # Убираем возвраты
+                    if "saleID" in sales_df.columns:
+                        sales_df = sales_df[~sales_df["saleID"].astype(str).str.startswith("R")]
+
+                    # Активные артикулы (любая продажа за 20 дней)
+                    active = set(sales_df["supplierArticle"].unique())
+
+                    # Средние продажи за последние 7 дней
+                    cutoff7 = datetime.now() - timedelta(days=7)
+                    if "date" in sales_df.columns:
+                        sales_df["date"] = pd.to_datetime(sales_df["date"], errors="coerce")
+                        s7 = sales_df[sales_df["date"] >= cutoff7]
+                    else:
+                        s7 = sales_df
+
+                    daily = s7.groupby("supplierArticle").size().div(7).reset_index()
                     daily.columns = ["supplierArticle", "daily_avg"]
                 else:
+                    active = set()
                     daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
+
             except Exception as e:
-                errors.append(f"Продажи 7д: {e}")
+                errors.append(f"Продажи: {e}")
+                active = set()
                 daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
 
-            # 3. Продажи за 20 дней (фильтр активных)
-            try:
-                s20 = fetch_sales(api_key, 20)
-                s20_df = pd.DataFrame(s20) if s20 else pd.DataFrame()
-                if not s20_df.empty and "supplierArticle" in s20_df.columns:
-                    if "saleID" in s20_df.columns:
-                        s20_df = s20_df[~s20_df["saleID"].astype(str).str.startswith("R")]
-                    active = set(s20_df["supplierArticle"].unique())
-                else:
-                    active = set()
-            except Exception as e:
-                errors.append(f"Продажи 20д: {e}")
-                active = set()
-
-            # 4. FBO в пути (поставки)
-            try:
-                inc_raw = fetch_incomes(api_key)
-                inc_df = pd.DataFrame(inc_raw) if inc_raw else pd.DataFrame()
-                if not inc_df.empty and "status" in inc_df.columns:
-                    in_tr = inc_df[~inc_df["status"].isin(["Принято", "Отклонён"])]
-                    fbo = in_tr.groupby("supplierArticle")["quantity"].sum().reset_index()
-                    fbo.columns = ["supplierArticle", "fbo_way"]
-                else:
-                    fbo = pd.DataFrame(columns=["supplierArticle", "fbo_way"])
-            except Exception as e:
-                errors.append(f"Поставки FBO: {e}")
-                fbo = pd.DataFrame(columns=["supplierArticle", "fbo_way"])
-
-            # 5. Баланс
-            balance = fetch_balance(api_key)
-            st.session_state.balance = balance
-
-            # Объединяем всё
+            # 3. Собираем итоговую таблицу
             if not agg.empty:
                 df = agg.copy()
                 df = df.merge(daily, on="supplierArticle", how="left")
-                df = df.merge(fbo, on="supplierArticle", how="left")
                 df["daily_avg"] = df["daily_avg"].fillna(0).round(1)
-                df["fbo_way"] = df["fbo_way"].fillna(0).astype(int)
-                df["total_qty"] = df["qty"] + df["in_way_client"] + df["fbo_way"]
+                df["total_qty"] = df["qty"] + df["in_way_client"]
                 df["turnover"] = df.apply(
                     lambda r: round(r["total_qty"] / r["daily_avg"]) if r["daily_avg"] > 0 else None,
                     axis=1
                 )
                 df["status"] = df["qty"].apply(status_label)
 
-                # Фильтр: только с продажами за 20 дней
+                # Только артикулы с продажами за 20 дней
                 if active:
                     df = df[df["supplierArticle"].isin(active)]
 
@@ -218,22 +178,19 @@ if st.session_state.df is not None:
         df = df[df["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
 
     # Метрики
-    bal = st.session_state.balance
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💰 Баланс WB", f"{bal:,.0f} ₸".replace(",", " ") if bal is not None else "—")
-    c2.metric("⏳ В обработке", "—", help="Требуется токен Финансы")
-    c3.metric("➕ Общая сумма", f"{bal:,.0f} ₸".replace(",", " ") if bal is not None else "—")
-    c4.metric("📦 Общий остаток", f"{st.session_state.total_stock:,} шт".replace(",", " "))
+    c1, c2 = st.columns(2)
+    c1.metric("📦 Общий остаток", f"{st.session_state.total_stock:,} шт".replace(",", " "))
+    c2.metric("📊 Позиций в отчёте", f"{len(st.session_state.df)}")
 
     st.divider()
 
     # Таблица
     show = df[[
-        "supplierArticle", "qty", "in_way_client", "fbo_way",
+        "supplierArticle", "qty", "in_way_client",
         "total_qty", "daily_avg", "turnover", "status"
     ]].copy()
     show.columns = [
-        "Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+        "Артикул", "Остаток", "В пути к клиенту",
         "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"
     ]
 
@@ -252,18 +209,17 @@ if st.session_state.df is not None:
 
     styled = (
         show.style
-        .applymap(style_turnover, subset=["Оборачиваемость"])
-        .applymap(style_status, subset=["Статус"])
+        .map(style_turnover, subset=["Оборачиваемость"])
+        .map(style_status, subset=["Статус"])
     )
 
     st.dataframe(styled, use_container_width=True, height=500,
         column_config={
-            "Остаток":         st.column_config.NumberColumn(format="%d шт"),
+            "Остаток":          st.column_config.NumberColumn(format="%d шт"),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
-            "FBO в пути":      st.column_config.NumberColumn(format="%d шт"),
-            "Общий остаток":   st.column_config.NumberColumn(format="%d шт"),
-            "Ср. продаж/день": st.column_config.NumberColumn(format="%.1f"),
-            "Оборачиваемость": st.column_config.NumberColumn(format="%d дн"),
+            "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
+            "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
+            "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
         }
     )
     st.caption(f"Показано: {len(df)} позиций (с продажами за последние 20 дней)")
@@ -280,12 +236,3 @@ if st.session_state.df is not None:
 
 else:
     st.info("👈 Нажмите **«Обновить данные»** для загрузки отчёта")
-    st.markdown("""
-    **Что показывает отчёт:**
-    - 💰 Баланс и сумма в обработке
-    - 📦 Остатки, товары в пути к клиенту и FBO поставки
-    - 📊 Средние продажи в день (за 7 дней) и оборачиваемость
-    - 🔴 Красная ячейка — оборачиваемость 10 дней и меньше
-    - Товары без продаж за 20 дней не отображаются
-    """)
-    
