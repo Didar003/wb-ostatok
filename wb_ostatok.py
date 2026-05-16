@@ -255,13 +255,22 @@ if st.session_state.df_base is not None:
 
     st.divider()
 
-    # 1-кесте: Итоговый отчёт
+    # 1-кесте: Итоговый отчёт (FBO қосып есептеу)
     st.markdown("#### 📊 Итоговый отчёт")
 
-    result = df[["supplierArticle", "qty", "in_way_client",
-                 "total", "daily_avg", "turnover", "status"]].copy()
-    result.columns = ["Артикул", "Остаток", "В пути к клиенту",
-                      "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]
+    result = df[["supplierArticle", "qty", "in_way_client", "daily_avg", "status"]].copy()
+    result.columns = ["Артикул", "Остаток", "В пути к клиенту", "Ср. продаж/день", "Статус"]
+
+    # FBO қолмен енгізілген деректерді қосу
+    fbo_data = st.session_state.get("fbo_data", {})
+    result["FBO в пути"] = result["Артикул"].map(fbo_data).fillna(0).astype(int)
+    result["Общий остаток"] = result["Остаток"] + result["В пути к клиенту"] + result["FBO в пути"]
+    result["Оборачиваемость"] = result.apply(
+        lambda r: round(r["Общий остаток"] / r["Ср. продаж/день"]) if r["Ср. продаж/день"] > 0 else None,
+        axis=1
+    )
+    result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+                     "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
 
     def style_turn(val):
         if pd.isna(val): return ""
@@ -282,6 +291,7 @@ if st.session_state.df_base is not None:
         column_config={
             "Остаток":          st.column_config.NumberColumn(format="%d шт"),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
+            "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
             "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
             "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
             "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
