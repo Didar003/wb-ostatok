@@ -335,20 +335,21 @@ def show_store(store, df, filter_status, search):
 # ──────────────────────────────────────────────
 stores = get_stores()
 
+# Рольге байланысты магазин тізімін сүзу (sidebar алдында)
+_role = st.session_state.get("role", "manager")
+_store_access = st.session_state.get("store_access", None)
+if _role == "owner" and _store_access:
+    visible_stores = [s for s in stores if s["idx"] == _store_access]
+else:
+    visible_stores = stores
+
 with st.sidebar:
     st.header("⚙️ Настройки")
 
-    if not stores:
-        st.warning("Магазин жоқ! Secrets-ке қосыңыз")
-        st.code("""PASSWORD = "director2024"
-STORE_NAMES = "Магазин 1,Магазин 2"
-STORE_1_STATS = "eyJ..."
-STORE_1_ANALYTICS = "eyJ..."
-STORE_2_STATS = "eyJ..."
-STORE_2_ANALYTICS = "eyJ..."
-""", language="toml")
+    if not visible_stores:
+        st.warning("Магазин жоқ!")
     else:
-        for s in stores:
+        for s in visible_stores:
             has_analytics = "✅" if s["analytics_key"] else "⚠️"
             st.markdown(f"**{s['name']}** {has_analytics}")
 
@@ -377,22 +378,13 @@ if not stores:
 
 # Деректерді жүктеу
 if fetch_btn:
-    for s in stores:
+    for s in visible_stores:
         df, errors = load_store_data(s)
         st.session_state[f"df_{s['idx']}"] = df
         for e in errors:
             st.warning(f"[{s['name']}] ⚠️ {e}")
     st.success("✅ Барлық магазин жүктелді!")
     st.rerun()
-
-# Рольге байланысты магазин тізімін сүзу
-role = st.session_state.get("role", "manager")
-store_access = st.session_state.get("store_access", None)
-
-if role == "owner" and store_access:
-    visible_stores = [s for s in stores if s["idx"] == store_access]
-else:
-    visible_stores = stores
 
 if not visible_stores:
     st.warning("Сізге қолжетімді магазин жоқ")
