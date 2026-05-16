@@ -6,21 +6,15 @@ import io
 import time
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
-
-st.markdown("""
-<style>
-  .block-container { padding-top: 1.5rem; }
-  .stDataFrame { border-radius: 8px; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
 
 def check_password():
     if st.session_state.get("authenticated"):
         return True
     st.title("🔐 Wildberries Отчёт")
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 1.5, 1])
-    with col2:
+    _, col, _ = st.columns([1, 1.5, 1])
+    with col:
         st.markdown("### Вход")
         pwd = st.text_input("Пароль", type="password", placeholder="••••••••")
         if st.button("Войти →", use_container_width=True):
@@ -46,7 +40,7 @@ def wb_get_retry(url, key, params={}, max_retries=3):
             continue
         r.raise_for_status()
         return r.json()
-    raise Exception("Лимит запросов WB API превышен.")
+    raise Exception("Лимит запросов превышен.")
 
 def status_label(q):
     if q == 0:    return "Ноль"
@@ -54,6 +48,7 @@ def status_label(q):
     if q <= 500:  return "Хорошо"
     return "Достаточно"
 
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Настройки")
     api_key = st.secrets.get("WB_API_KEY", "")
@@ -77,15 +72,19 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
 
+# State
 if "df_base" not in st.session_state:
     st.session_state.df_base = None
+if "fbo_data" not in st.session_state:
+    st.session_state.fbo_data = {}
 
+# Fetch data
 if fetch_btn:
     if not api_key:
         st.sidebar.error("Введите API ключ!")
     else:
         errors = []
-        with st.spinner("Загружаем данные из Wildberries..."):
+        with st.spinner("Загружаем данные..."):
             try:
                 stocks_raw = wb_get_retry(
                     "https://statistics-api.wildberries.ru/api/v1/supplier/stocks",
@@ -135,10 +134,10 @@ if fetch_btn:
                     df = df[df["supplierArticle"].isin(active)]
                 st.session_state.df_base = df.reset_index(drop=True)
                 st.sidebar.success(f"✅ Загружено {len(df)} позиций")
-
             for e in errors:
                 st.sidebar.warning(f"⚠️ {e}")
 
+# Main
 st.title("📦 Wildberries отчёт")
 st.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
@@ -157,73 +156,48 @@ if st.session_state.df_base is not None:
     if search:
         df = df[df["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
 
-    # Шаг 1: FBO енгізу
-    st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
-    fbo_input = df[["supplierArticle", "qty", "in_way_client"]].copy()
-    fbo_input.columns = ["Артикул", "Остаток", "В пути к клиенту"]
-    fbo_input["FBO в пути"] = 0
-
-    edited = st.data_editor(
-        fbo_input,
-        use_container_width=True,
-        height=350,
-        column_config={
-            "Артикул":          st.column_config.TextColumn(disabled=True),
-            "Остаток":          st.column_config.NumberColumn(format="%d шт", disabled=True),
-            "В пути к клиенту": st.column_config.NumberColumn(format="%d шт", disabled=True),
-            "FBO в пути":       st.column_config.NumberColumn(
-                format="%d шт", min_value=0,
-                help="Складқа баратын поставка данасын осы жерге жазыңыз"
-            ),
-        }
+    # FBO деректерін қолдану
+    df["fbo"] = df["supplierArticle"].map(st.session_state.fbo_data).fillna(0).astype(int)
+    df["total"] = df["qty"] + df["in_way_client"] + df["fbo"]
+    df["turnover"] = df.apply(
+        lambda r: round(r["total"] / r["daily_avg"]) if r["daily_avg"] > 0 else None, axis=1
     )
-
-    st.divider()
-
-    # Шаг 2: Пересчёт
-    result = edited.copy()
-    result = result.merge(df[["supplierArticle", "daily_avg"]], left_on="Артикул", right_on="supplierArticle", how="left").drop(columns="supplierArticle")
-    result["Общий остаток"] = result["Остаток"] + result["В пути к клиенту"] + result["FBO в пути"]
-    result["Ср. продаж/день"] = result["daily_avg"].round(1)
-    result["Оборачиваемость"] = result.apply(
-        lambda r: round(r["Общий остаток"] / r["Ср. продаж/день"]) if r["Ср. продаж/день"] > 0 else None,
-        axis=1
-    )
-    result["Статус"] = result["Остаток"].apply(status_label)
-    result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
-                     "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
+    df["status"] = df["qty"].apply(status_label)
 
     # Метрики
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("📦 Общий остаток", f"{int(result['Общий остаток'].sum()):,} шт".replace(",", " "))
-    c2.metric("📊 Всего позиций", len(result))
-    c3.metric("🔴 Критические", int(result["Оборачиваемость"].dropna().apply(lambda x: x <= 10).sum()),
+    c1.metric("📦 Общий остаток", f"{int(df['total'].sum()):,} шт".replace(",", " "))
+    c2.metric("📊 Позиций", len(df))
+    c3.metric("🔴 Критические", int(df["turnover"].dropna().apply(lambda x: x <= 10).sum()),
               help="Оборачиваемость ≤ 10 дней")
-    c4.metric("⚫ Ноль остаток", int((result["Остаток"] == 0).sum()))
+    c4.metric("⚫ Ноль", int((df["qty"] == 0).sum()))
 
-    # Стилизованная таблица результатов
+    st.divider()
+
+    # ===== 1-КЕСТЕ: ИТОГОВЫЙ ОТЧЁТ =====
     st.markdown("#### 📊 Итоговый отчёт")
 
-    def style_turnover(val):
-        if pd.isna(val): return ""
-        return "background-color: #FCEBEB; color: #A32D2D; font-weight: bold" if val <= 10 else ""
+    result = df[["supplierArticle", "qty", "in_way_client", "fbo",
+                 "total", "daily_avg", "turnover", "status"]].copy()
+    result.columns = ["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+                      "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]
 
-    def style_status(val):
+    def style_turn(val):
+        if pd.isna(val): return ""
+        return "background-color:#FCEBEB;color:#A32D2D;font-weight:bold" if val <= 10 else ""
+
+    def style_stat(val):
         m = {
-            "Ноль":       "background-color: #FCEBEB; color: #A32D2D",
-            "Мало":       "background-color: #FAEEDA; color: #854F0B",
-            "Хорошо":     "background-color: #EAF3DE; color: #3B6D11",
-            "Достаточно": "background-color: #E6F1FB; color: #185FA5",
+            "Ноль":       "background-color:#FCEBEB;color:#A32D2D",
+            "Мало":       "background-color:#FAEEDA;color:#854F0B",
+            "Хорошо":     "background-color:#EAF3DE;color:#3B6D11",
+            "Достаточно": "background-color:#E6F1FB;color:#185FA5",
         }
         return m.get(val, "")
 
-    styled = (
-        result.style
-        .map(style_turnover, subset=["Оборачиваемость"])
-        .map(style_status, subset=["Статус"])
-    )
+    styled = result.style.map(style_turn, subset=["Оборачиваемость"]).map(style_stat, subset=["Статус"])
 
-    st.dataframe(styled, use_container_width=True, height=450,
+    st.dataframe(styled, use_container_width=True, height=460,
         column_config={
             "Остаток":          st.column_config.NumberColumn(format="%d шт"),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
@@ -233,17 +207,42 @@ if st.session_state.df_base is not None:
             "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
         }
     )
-    st.caption(f"Показано: {len(result)} позиций (с продажами за последние 20 дней)")
+    st.caption(f"Показано: {len(result)} позиций")
 
+    # Excel
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         result.to_excel(writer, index=False, sheet_name="Отчёт WB")
-    st.download_button(
-        "⬇️ Скачать Excel",
-        data=buf.getvalue(),
+    st.download_button("⬇️ Скачать Excel", data=buf.getvalue(),
         file_name=f"WB_Отчёт_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.divider()
+
+    # ===== 2-КЕСТЕ: FBO ЕНГІЗУ =====
+    st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
+    st.caption("FBO жазып болған соң жоғарыдағы кесте автоматты жаңарады")
+
+    fbo_table = df[["supplierArticle"]].copy()
+    fbo_table.columns = ["Артикул"]
+    fbo_table["FBO в пути"] = fbo_table["Артикул"].map(st.session_state.fbo_data).fillna(0).astype(int)
+
+    fbo_edited = st.data_editor(
+        fbo_table,
+        use_container_width=True,
+        height=400,
+        column_config={
+            "Артикул":    st.column_config.TextColumn(disabled=True),
+            "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
+        }
     )
+
+    # FBO мәндерін сақтау
+    new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
+    if new_fbo != st.session_state.fbo_data:
+        st.session_state.fbo_data = new_fbo
+        st.rerun()
 
 else:
     st.info("👈 Нажмите **«Обновить данные»** для загрузки отчёта")
+  
