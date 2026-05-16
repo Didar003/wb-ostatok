@@ -98,6 +98,7 @@ if fetch_btn:
                     name=("subject", "first"),
                     qty=("quantity", "sum"),
                     in_way_client=("inWayToClient", "sum"),
+                    fbo_way=("inWayFromClient", "sum"),
                 ).reset_index()
             except Exception as e:
                 errors.append(f"Остатки: {e}")
@@ -138,7 +139,8 @@ if fetch_btn:
                 df = agg.copy()
                 df = df.merge(daily, on="supplierArticle", how="left")
                 df["daily_avg"] = df["daily_avg"].fillna(0).round(1)
-                df["total_qty"] = df["qty"] + df["in_way_client"]
+                df["fbo_way"] = df["fbo_way"].fillna(0).astype(int)
+                df["total_qty"] = df["qty"] + df["in_way_client"] + df["fbo_way"]
                 df["turnover"] = df.apply(
                     lambda r: round(r["total_qty"] / r["daily_avg"]) if r["daily_avg"] > 0 else None,
                     axis=1
@@ -186,11 +188,11 @@ if st.session_state.df is not None:
     st.divider()
 
     show = df[[
-        "supplierArticle", "qty", "in_way_client",
+        "supplierArticle", "qty", "in_way_client", "fbo_way",
         "total_qty", "daily_avg", "turnover", "status"
     ]].copy()
     show.columns = [
-        "Артикул", "Остаток", "В пути к клиенту",
+        "Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
         "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"
     ]
 
@@ -217,6 +219,7 @@ if st.session_state.df is not None:
         column_config={
             "Остаток":          st.column_config.NumberColumn(format="%d шт"),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
+            "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
             "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
             "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
             "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
