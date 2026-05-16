@@ -160,6 +160,7 @@ if fetch_btn:
                 try:
                     st.sidebar.info("📊 Загружаем отчёт об остатках (до 2 мин)...")
                     remains_data = fetch_warehouse_remains(analytics_key)
+                    st.session_state["_remains_raw"] = remains_data
                     agg = parse_warehouse_remains(remains_data)
                     st.sidebar.success("✅ Остатки и FBO загружены")
                 except Exception as e:
@@ -329,3 +330,12 @@ if st.session_state.df_base is not None:
 
 else:
     st.info("👈 Нажмите **«Обновить данные»** для загрузки отчёта")
+
+# DEBUG блок
+if st.session_state.get("_remains_raw"):
+    with st.expander("🔍 Debug: барлық склад атаулары"):
+        names = set()
+        for item in st.session_state["_remains_raw"]:
+            for wh in item.get("warehouses", []):
+                names.add(wh.get("warehouseName", ""))
+        st.write(sorted(names))
