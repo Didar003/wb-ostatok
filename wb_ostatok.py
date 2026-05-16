@@ -228,28 +228,28 @@ def load_store_data(store):
     sales30 = pd.DataFrame()
     try:
         with st.spinner(f"[{name}] Продажи 30 дней..."):
-            # 35 күн сұраймыз, нақты 30 күнді date бойынша сүземіз
+            # Заказдар (клиент жасаған) — 90 күн сұраймыз
             s30_raw = wb_get_retry(
-                "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
-                stats_key, {"dateFrom": days_ago_str(35), "flag": 0}, store_name=name
+                "https://statistics-api.wildberries.ru/api/v1/supplier/orders",
+                stats_key, {"dateFrom": days_ago_str(90), "flag": 0}, store_name=name
             )
             s30_df = pd.DataFrame(s30_raw) if s30_raw else pd.DataFrame()
             if not s30_df.empty and "date" in s30_df.columns:
                 s30_df["date"] = pd.to_datetime(s30_df["date"], errors="coerce")
-                # Нақты сату күні бойынша соңғы 30 күнді аламыз
+                # Нақты заказ күні бойынша соңғы 30 күнді аламыз
                 cutoff30 = pd.Timestamp.now() - pd.Timedelta(days=30)
                 s30_df = s30_df[s30_df["date"] >= cutoff30]
-                # Тек нақты продажалар (R = қайтарым, S = продажа)
-                if "saleID" in s30_df.columns:
-                    s30_df = s30_df[s30_df["saleID"].astype(str).str.startswith("S")]
+                # Отмена болмағандарды аламыз
+                if "isCancel" in s30_df.columns:
+                    s30_df = s30_df[s30_df["isCancel"] == False]
                 s30_df["date_only"] = s30_df["date"].dt.date
                 s30_df["priceWithDisc"] = pd.to_numeric(
                     s30_df.get("priceWithDisc", 0), errors="coerce").fillna(0)
                 sales30 = s30_df.groupby("date_only").agg(
-                    qty=("saleID", "count"),
+                    qty=("date_only", "count"),
                     revenue=("priceWithDisc", "sum")
                 ).reset_index()
-                sales30.columns = ["Дата", "Продано (шт)", "Выручка (₸)"]
+                sales30.columns = ["Дата", "Заказ (шт)", "Выручка (₸)"]
                 sales30 = sales30.sort_values("Дата")
     except Exception as e:
         errors.append(f"Аналитика: {e}")
@@ -289,21 +289,21 @@ def show_store(store, df, sales30, filter_status, search):
         if sales30 is None or sales30.empty:
             st.info("Продажа деректері жоқ")
         else:
-            total_qty = int(sales30["Продано (шт)"].sum())
+            total_qty = int(sales30["Заказ (шт)"].sum())
             total_rev = sales30["Выручка (₸)"].sum()
             avg_day = total_qty / 30
-            best_day = sales30.loc[sales30["Продано (шт)"].idxmax()]
+            best_day = sales30.loc[sales30["Заказ (шт)"].idxmax()]
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("📦 Жалпы сатылды", f"{total_qty:,} шт".replace(",", " "))
             c2.metric("💰 Жалпы выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
             c3.metric("📈 Күндік орта", f"{avg_day:.1f} шт")
-            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Продано (шт)']} шт")
+            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Заказ (шт)']} шт")
 
             st.divider()
             st.markdown("#### 📊 Күн бойынша сатылым (соңғы 30 күн)")
 
-            chart_df = sales30.set_index("Дата")[["Продано (шт)"]]
+            chart_df = sales30.set_index("Дата")[["Заказ (шт)"]]
             st.bar_chart(chart_df, height=350)
 
             st.markdown("#### 💰 Күн бойынша выручка (соңғы 30 күн)")
@@ -319,7 +319,7 @@ def show_store(store, df, sales30, filter_status, search):
                 use_container_width=True,
                 height=400,
                 column_config={
-                    "Продано (шт)": st.column_config.NumberColumn(format="%d шт"),
+                    "Заказ (шт)": st.column_config.NumberColumn(format="%d шт"),
                     "Выручка (₸)": st.column_config.NumberColumn(format="%d ₸"),
                 }
             )
@@ -508,3 +508,4 @@ for i, (tab, store) in enumerate(zip(tabs, visible_stores)):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
+            
