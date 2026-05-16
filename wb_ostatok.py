@@ -134,10 +134,28 @@ if fetch_btn:
                 active = set()
                 daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
 
-            # 3. Итоговая таблица
+            # 3. FBO поставки в пути (incomes)
+            fbo_transit = pd.DataFrame(columns=["supplierArticle", "fbo_way"])
+            try:
+                time.sleep(2)
+                inc_raw = wb_get_retry(
+                    "https://statistics-api.wildberries.ru/api/v1/supplier/incomes",
+                    api_key, {"dateFrom": days_ago_str(90)}
+                )
+                inc_df = pd.DataFrame(inc_raw) if inc_raw else pd.DataFrame()
+                if not inc_df.empty and "status" in inc_df.columns:
+                    in_tr = inc_df[~inc_df["status"].isin(["Принято", "Отклонён", "Отклонен"])]
+                    if not in_tr.empty and "supplierArticle" in in_tr.columns:
+                        fbo_transit = in_tr.groupby("supplierArticle")["quantity"].sum().reset_index()
+                        fbo_transit.columns = ["supplierArticle", "fbo_way"]
+            except Exception as e:
+                errors.append(f"FBO поставки: {e}")
+
+            # 4. Итоговая таблица
             if not agg.empty:
                 df = agg.copy()
                 df = df.merge(daily, on="supplierArticle", how="left")
+                df = df.merge(fbo_transit, on="supplierArticle", how="left")
                 df["daily_avg"] = df["daily_avg"].fillna(0).round(1)
                 df["fbo_way"] = df["fbo_way"].fillna(0).astype(int)
                 df["total_qty"] = df["qty"] + df["in_way_client"] + df["fbo_way"]
