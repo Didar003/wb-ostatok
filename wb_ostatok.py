@@ -39,20 +39,14 @@ def days_ago_str(n):
 
 def wb_get_retry(url, key, params={}, max_retries=3):
     for attempt in range(max_retries):
-        try:
-            r = requests.get(url, headers={"Authorization": key}, params=params, timeout=60)
-            if r.status_code == 429:
-                wait = 65
-                st.sidebar.info(f"⏳ WB API лимит — {wait} сек күтілуде...")
-                time.sleep(wait)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except requests.exceptions.HTTPError as e:
-            if attempt < max_retries - 1 and r.status_code == 429:
-                continue
-            raise e
-    raise Exception("Максимальное количество попыток исчерпано")
+        r = requests.get(url, headers={"Authorization": key}, params=params, timeout=60)
+        if r.status_code == 429:
+            st.sidebar.info(f"⏳ WB API лимит — 65 сек күтілуде ({attempt+1}/{max_retries})...")
+            time.sleep(65)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise Exception("Лимит запросов WB API превышен. Попробуйте через минуту.")
 
 def status_label(q):
     if q == 0:    return "Ноль"
@@ -63,16 +57,10 @@ def status_label(q):
 with st.sidebar:
     st.header("⚙️ Настройки")
     api_key = st.secrets.get("WB_API_KEY", "")
-    finance_key = st.secrets.get("WB_FINANCE_KEY", "")
     if api_key:
         st.success("✅ API ключ подключён")
     else:
-        api_key = st.text_input("API ключ (Статистика)", type="password", placeholder="eyJ...")
-    if finance_key:
-        st.success("✅ Финансы ключ подключён")
-    else:
-        finance_key = st.text_input("API ключ (Финансы)", type="password", placeholder="eyJ...")
-
+        api_key = st.text_input("API ключ", type="password", placeholder="eyJ...")
     fetch_btn = st.button("🔄 Обновить данные", use_container_width=True)
     st.divider()
     st.markdown("**Фильтры**")
@@ -89,9 +77,8 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
 
-for k in ["df", "total_stock", "balance", "in_process"]:
-    if k not in st.session_state:
-        st.session_state[k] = None
+if "df" not in st.session_state:
+    st.session_state.df = None
 
 if fetch_btn:
     if not api_key:
@@ -146,51 +133,7 @@ if fetch_btn:
                 active = set()
                 daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
 
-            # 3. Финансы — баланс и в обработке
-            balance = None
-            in_process = None
-            if finance_key:
-                try:
-                    fin = wb_get_retry(
-                        "https://statistics-api.wildberries.ru/api/v1/supplier/balance",
-                        finance_key
-                    )
-                    balance = fin.get("balance", None)
-                except:
-                    pass
-
-                if balance is None:
-                    try:
-                        date_from = days_ago_str(7)
-                        date_to = datetime.now().strftime("%Y-%m-%dT23:59:59")
-                        rep = wb_get_retry(
-                            "https://statistics-api.wildberries.ru/api/v1/supplier/reportDetailByPeriod",
-                            finance_key,
-                            {"dateFrom": date_from, "dateTo": date_to, "limit": 1, "rrdid": 0}
-                        )
-                    except Exception as e:
-                        errors.append(f"Финансы: {e}")
-
-                # История платежей — в обработке
-                try:
-                    pay = wb_get_retry(
-                        "https://statistics-api.wildberries.ru/api/v1/supplier/payments",
-                        finance_key,
-                        {"dateFrom": days_ago_str(30)}
-                    )
-                    if pay:
-                        pay_df = pd.DataFrame(pay)
-                        if "supplierStatus" in pay_df.columns:
-                            pending = pay_df[pay_df["supplierStatus"].isin(["waiting", "processing"])]
-                            if "documentAmount" in pending.columns:
-                                in_process = pending["documentAmount"].sum()
-                except Exception as e:
-                    errors.append(f"Платежи: {e}")
-
-            st.session_state.balance = balance
-            st.session_state.in_process = in_process
-
-            # 4. Итоговая таблица
+            # 3. Итоговая таблица
             if not agg.empty:
                 df = agg.copy()
                 df = df.merge(daily, on="supplierArticle", how="left")
@@ -204,7 +147,6 @@ if fetch_btn:
                 if active:
                     df = df[df["supplierArticle"].isin(active)]
                 st.session_state.df = df
-                st.session_state.total_stock = int(df["total_qty"].sum())
                 st.sidebar.success(f"✅ Загружено {len(df)} позиций")
 
             for e in errors:
@@ -215,7 +157,8 @@ st.title("📦 Wildberries отчёт")
 st.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
 if st.session_state.df is not None:
-    df = st.session_state.df.copy()
+    df_full = st.session_state.df
+    df = df_full.copy()
 
     if filter_status == "Ноль":
         df = df[df["qty"] == 0]
@@ -229,19 +172,16 @@ if st.session_state.df is not None:
         df = df[df["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
 
     # Метрики
-    bal = st.session_state.balance
-    inp = st.session_state.in_process
-    total = (bal or 0) + (inp or 0)
+    total_qty = int(df_full["total_qty"].sum())
+    zero_count = int((df_full["qty"] == 0).sum())
+    critical = int(df_full["turnover"].dropna().apply(lambda x: x <= 10).sum())
+    positions = len(df_full)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💰 Баланс WB",
-              f"{bal:,.0f} ₸".replace(",", " ") if bal is not None else "—")
-    c2.metric("⏳ В обработке",
-              f"{inp:,.0f} ₸".replace(",", " ") if inp is not None else "—")
-    c3.metric("➕ Общая сумма",
-              f"{total:,.0f} ₸".replace(",", " ") if (bal or inp) else "—")
-    c4.metric("📦 Общий остаток",
-              f"{st.session_state.total_stock:,} шт".replace(",", " "))
+    c1.metric("📦 Общий остаток", f"{total_qty:,} шт".replace(",", " "))
+    c2.metric("📊 Всего позиций", f"{positions}")
+    c3.metric("🔴 Критические", f"{critical}", help="Оборачиваемость ≤ 10 дней")
+    c4.metric("⚫ Ноль остаток", f"{zero_count}")
 
     st.divider()
 
@@ -296,5 +236,3 @@ if st.session_state.df is not None:
 
 else:
     st.info("👈 Нажмите **«Обновить данные»** для загрузки отчёта")
-    if not finance_key:
-        st.warning("💡 Для отображения баланса добавьте токен **Финансы** в настройках слева")
