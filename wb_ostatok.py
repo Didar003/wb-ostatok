@@ -12,7 +12,7 @@ st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow
 # ШЫҒ / КІРУ
 # ──────────────────────────────────────────────
 def check_password():
-    if st.session_state.get("authenticated"):
+    if st.session_state.get("role"):
         return True
     st.title("🔐 Wildberries Отчёт")
     st.markdown("---")
@@ -21,11 +21,24 @@ def check_password():
         st.markdown("### Вход")
         pwd = st.text_input("Пароль", type="password", placeholder="••••••••")
         if st.button("Войти →", use_container_width=True):
-            if pwd == st.secrets.get("PASSWORD", "director2024"):
-                st.session_state.authenticated = True
+            manager_pwd = st.secrets.get("MANAGER_PASSWORD", "")
+            # Менеджер паролін тексеру
+            if manager_pwd and pwd == manager_pwd:
+                st.session_state.role = "manager"
+                st.session_state.store_access = None  # барлығына рұқсат
                 st.rerun()
-            else:
-                st.error("Неверный пароль!")
+                return True
+            # Магазин иесі паролін тексеру
+            stores_str = st.secrets.get("STORE_NAMES", "")
+            store_names = [n.strip() for n in stores_str.split(",") if n.strip()]
+            for i, name in enumerate(store_names, 1):
+                owner_pwd = st.secrets.get(f"STORE_{i}_PASSWORD", "")
+                if owner_pwd and pwd == owner_pwd:
+                    st.session_state.role = "owner"
+                    st.session_state.store_access = i
+                    st.rerun()
+                    return True
+            st.error("Неверный пароль!")
     return False
 
 if not check_password():
@@ -351,7 +364,8 @@ STORE_2_ANALYTICS = "eyJ..."
     🔴 Красная ячейка = оборачиваемость ≤ 10 дней
     </div>""", unsafe_allow_html=True)
     if st.button("🚪 Выйти"):
-        st.session_state.authenticated = False
+        st.session_state.role = None
+        st.session_state.store_access = None
         st.rerun()
 
 st.title("📦 Wildberries отчёт")
@@ -371,11 +385,24 @@ if fetch_btn:
     st.success("✅ Барлық магазин жүктелді!")
     st.rerun()
 
+# Рольге байланысты магазин тізімін сүзу
+role = st.session_state.get("role", "manager")
+store_access = st.session_state.get("store_access", None)
+
+if role == "owner" and store_access:
+    visible_stores = [s for s in stores if s["idx"] == store_access]
+else:
+    visible_stores = stores
+
+if not visible_stores:
+    st.warning("Сізге қолжетімді магазин жоқ")
+    st.stop()
+
 # Табтар
-tab_names = [s["name"] for s in stores]
+tab_names = [s["name"] for s in visible_stores]
 tabs = st.tabs(tab_names)
 
-for i, (tab, store) in enumerate(zip(tabs, stores)):
+for i, (tab, store) in enumerate(zip(tabs, visible_stores)):
     with tab:
         df_key = f"df_{store['idx']}"
         if df_key not in st.session_state or st.session_state[df_key] is None:
