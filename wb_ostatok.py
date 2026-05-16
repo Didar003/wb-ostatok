@@ -98,7 +98,7 @@ if fetch_btn:
                     name=("subject", "first"),
                     qty=("quantity", "sum"),
                     in_way_client=("inWayToClient", "sum"),
-                    fbo_way=("inWayFromClient", "sum"),
+
                 ).reset_index()
             except Exception as e:
                 errors.append(f"Остатки: {e}")
