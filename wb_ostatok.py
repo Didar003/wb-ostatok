@@ -93,17 +93,14 @@ def parse_warehouse_remains(data):
         for wh in warehouses:
             name = wh.get("warehouseName", "")
             qty = wh.get("quantity", 0)
-            if name == "В пути до получателей":
-                in_transit_to_client = qty
-            elif name == "В пути возвраты на склад WB":
-                in_transit_return = qty
+            if name in ("В пути до получателей", "В пути возвраты на склад WB"):
+                in_transit_to_client += qty
             elif name == "Всего находится на складах":
                 total_stock = qty
         rows.append({
             "supplierArticle": sa,
             "qty": total_stock,
             "in_way_client": in_transit_to_client,
-            "fbo_way": in_transit_return,
         })
     return pd.DataFrame(rows)
 
@@ -216,8 +213,7 @@ if fetch_btn:
             if not agg.empty:
                 df = agg.merge(daily, on="supplierArticle", how="left")
                 df["daily_avg"] = df["daily_avg"].fillna(0).round(1)
-                df["fbo_way"] = df.get("fbo_way", pd.Series(0, index=df.index)).fillna(0).astype(int)
-                df["total"] = df["qty"] + df["in_way_client"] + df["fbo_way"]
+                df["total"] = df["qty"] + df["in_way_client"]
                 df["turnover"] = df.apply(
                     lambda r: round(r["total"] / r["daily_avg"]) if r["daily_avg"] > 0 else None, axis=1
                 )
@@ -262,9 +258,9 @@ if st.session_state.df_base is not None:
     # 1-кесте: Итоговый отчёт
     st.markdown("#### 📊 Итоговый отчёт")
 
-    result = df[["supplierArticle", "qty", "in_way_client", "fbo_way",
+    result = df[["supplierArticle", "qty", "in_way_client",
                  "total", "daily_avg", "turnover", "status"]].copy()
-    result.columns = ["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+    result.columns = ["Артикул", "Остаток", "В пути к клиенту",
                       "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]
 
     def style_turn(val):
@@ -286,7 +282,6 @@ if st.session_state.df_base is not None:
         column_config={
             "Остаток":          st.column_config.NumberColumn(format="%d шт"),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
-            "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
             "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
             "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
             "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
@@ -303,30 +298,27 @@ if st.session_state.df_base is not None:
 
     st.divider()
 
-    # 2-кесте: FBO қолмен енгізу (Аналитика токені жоқ болса)
-    if not analytics_key:
-        st.markdown("#### ✏️ FBO в пути — санды қолмен енгізіңіз")
-        st.caption("Аналитика токенін қоссаңыз FBO автоматты жүктеледі")
+    # 2-кесте: FBO қолмен енгізу
+    st.markdown("#### ✏️ FBO в пути — санды қолмен енгізіңіз")
+    st.caption("Складқа баратын поставка дана санын жазыңыз")
 
-        fbo_table = df[["supplierArticle"]].copy()
-        fbo_table.columns = ["Артикул"]
-        fbo_table["FBO в пути"] = fbo_table["Артикул"].map(
-            st.session_state.get("fbo_data", {})
-        ).fillna(0).astype(int)
+    fbo_table = df[["supplierArticle"]].copy()
+    fbo_table.columns = ["Артикул"]
+    fbo_table["FBO в пути"] = fbo_table["Артикул"].map(
+        st.session_state.get("fbo_data", {})
+    ).fillna(0).astype(int)
 
-        fbo_edited = st.data_editor(
-            fbo_table, use_container_width=True, height=400,
-            column_config={
-                "Артикул":    st.column_config.TextColumn(disabled=True),
-                "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
-            }
-        )
-        new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
-        if new_fbo != st.session_state.get("fbo_data", {}):
-            st.session_state.fbo_data = new_fbo
-            st.rerun()
-    else:
-        st.success("✅ FBO в пути автоматически загружен через API Аналитика")
+    fbo_edited = st.data_editor(
+        fbo_table, use_container_width=True, height=400,
+        column_config={
+            "Артикул":    st.column_config.TextColumn(disabled=True),
+            "FBO в пути": st.column_config.NumberColumn(format="%d шт", min_value=0),
+        }
+    )
+    new_fbo = dict(zip(fbo_edited["Артикул"], fbo_edited["FBO в пути"]))
+    if new_fbo != st.session_state.get("fbo_data", {}):
+        st.session_state.fbo_data = new_fbo
+        st.rerun()
 
 else:
     st.info("👈 Нажмите **«Обновить данные»** для загрузки отчёта")
