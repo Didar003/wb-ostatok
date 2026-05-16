@@ -228,19 +228,26 @@ def load_store_data(store):
     sales30 = pd.DataFrame()
     try:
         with st.spinner(f"[{name}] Продажи 30 дней..."):
+            # 35 күн сұраймыз, нақты 30 күнді date бойынша сүземіз
             s30_raw = wb_get_retry(
                 "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
-                stats_key, {"dateFrom": days_ago_str(30), "flag": 0}, store_name=name
+                stats_key, {"dateFrom": days_ago_str(35), "flag": 0}, store_name=name
             )
             s30_df = pd.DataFrame(s30_raw) if s30_raw else pd.DataFrame()
             if not s30_df.empty and "date" in s30_df.columns:
+                s30_df["date"] = pd.to_datetime(s30_df["date"], errors="coerce")
+                # Нақты сату күні бойынша соңғы 30 күнді аламыз
+                cutoff30 = pd.Timestamp.now() - pd.Timedelta(days=30)
+                s30_df = s30_df[s30_df["date"] >= cutoff30]
+                # Тек нақты продажалар (R = қайтарым, S = продажа)
                 if "saleID" in s30_df.columns:
-                    s30_df = s30_df[~s30_df["saleID"].astype(str).str.startswith("R")]
-                s30_df["date"] = pd.to_datetime(s30_df["date"], errors="coerce").dt.date
-                s30_df["forPay"] = pd.to_numeric(s30_df.get("forPay", 0), errors="coerce").fillna(0)
-                sales30 = s30_df.groupby("date").agg(
+                    s30_df = s30_df[s30_df["saleID"].astype(str).str.startswith("S")]
+                s30_df["date_only"] = s30_df["date"].dt.date
+                s30_df["priceWithDisc"] = pd.to_numeric(
+                    s30_df.get("priceWithDisc", 0), errors="coerce").fillna(0)
+                sales30 = s30_df.groupby("date_only").agg(
                     qty=("saleID", "count"),
-                    revenue=("forPay", "sum")
+                    revenue=("priceWithDisc", "sum")
                 ).reset_index()
                 sales30.columns = ["Дата", "Продано (шт)", "Выручка (₸)"]
                 sales30 = sales30.sort_values("Дата")
@@ -501,4 +508,3 @@ for i, (tab, store) in enumerate(zip(tabs, visible_stores)):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
-            
