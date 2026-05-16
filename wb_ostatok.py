@@ -41,7 +41,7 @@ def wb_get_retry(url, key, params={}, max_retries=3):
     for attempt in range(max_retries):
         r = requests.get(url, headers={"Authorization": key}, params=params, timeout=60)
         if r.status_code == 429:
-            st.sidebar.info(f"⏳ WB API лимит — 65 сек күтілуде ({attempt+1}/{max_retries})...")
+            st.sidebar.info(f"⏳ WB API лимит — 65 сек ({attempt+1}/{max_retries})...")
             time.sleep(65)
             continue
         r.raise_for_status()
@@ -86,8 +86,6 @@ if fetch_btn:
     else:
         errors = []
         with st.spinner("Загружаем данные из Wildberries..."):
-
-            # 1. Остатки
             try:
                 stocks_raw = wb_get_retry(
                     "https://statistics-api.wildberries.ru/api/v1/supplier/stocks",
@@ -95,7 +93,6 @@ if fetch_btn:
                 )
                 s_df = pd.DataFrame(stocks_raw)
                 agg = s_df.groupby("supplierArticle").agg(
-                    name=("subject", "first"),
                     qty=("quantity", "sum"),
                     in_way_client=("inWayToClient", "sum"),
                 ).reset_index()
@@ -105,7 +102,6 @@ if fetch_btn:
 
             time.sleep(3)
 
-            # 2. Продажи за 20 дней
             try:
                 sales_raw = wb_get_retry(
                     "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
@@ -132,21 +128,17 @@ if fetch_btn:
                 active = set()
                 daily = pd.DataFrame(columns=["supplierArticle", "daily_avg"])
 
-            # 3. Итоговая таблица
             if not agg.empty:
-                df = agg.copy()
-                df = df.merge(daily, on="supplierArticle", how="left")
+                df = agg.merge(daily, on="supplierArticle", how="left")
                 df["daily_avg"] = df["daily_avg"].fillna(0).round(1)
-                df["status"] = df["qty"].apply(status_label)
                 if active:
                     df = df[df["supplierArticle"].isin(active)]
-                st.session_state.df_base = df
+                st.session_state.df_base = df.reset_index(drop=True)
                 st.sidebar.success(f"✅ Загружено {len(df)} позиций")
 
             for e in errors:
                 st.sidebar.warning(f"⚠️ {e}")
 
-# Заголовок
 st.title("📦 Wildberries отчёт")
 st.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
@@ -165,62 +157,87 @@ if st.session_state.df_base is not None:
     if search:
         df = df[df["supplierArticle"].astype(str).str.contains(search, case=False, na=False)]
 
-    # Готовим таблицу для редактирования
-    show = df[["supplierArticle", "qty", "in_way_client", "daily_avg", "status"]].copy()
-    show.columns = ["Артикул", "Остаток", "В пути к клиенту", "Ср. продаж/день", "Статус"]
-    show.insert(3, "FBO в пути", 0)
-    show["Общий остаток"] = show["Остаток"] + show["В пути к клиенту"] + show["FBO в пути"]
-    show["Оборачиваемость"] = show.apply(
-        lambda r: round(r["Общий остаток"] / r["Ср. продаж/день"]) if r["Ср. продаж/день"] > 0 else None,
-        axis=1
-    )
-    show = show[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
-                 "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
-
-    # Метрики
-    total_qty = int(show["Общий остаток"].sum())
-    zero_count = int((show["Остаток"] == 0).sum())
-    critical = int(show["Оборачиваемость"].dropna().apply(lambda x: x <= 10).sum())
-    positions = len(show)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("📦 Общий остаток", f"{total_qty:,} шт".replace(",", " "))
-    c2.metric("📊 Всего позиций", f"{positions}")
-    c3.metric("🔴 Критические", f"{critical}", help="Оборачиваемость ≤ 10 дней")
-    c4.metric("⚫ Ноль остаток", f"{zero_count}")
-
-    st.divider()
-
-    st.caption("✏️ **FBO в пути** бағанына санды өзіңіз енгізіңіз — Общий остаток және Оборачиваемость автоматты жаңарады")
+    # Шаг 1: FBO енгізу
+    st.markdown("#### ✏️ FBO в пути — санды енгізіңіз")
+    fbo_input = df[["supplierArticle", "qty", "in_way_client"]].copy()
+    fbo_input.columns = ["Артикул", "Остаток", "В пути к клиенту"]
+    fbo_input["FBO в пути"] = 0
 
     edited = st.data_editor(
-        show,
+        fbo_input,
         use_container_width=True,
-        height=500,
+        height=350,
         column_config={
             "Артикул":          st.column_config.TextColumn(disabled=True),
             "Остаток":          st.column_config.NumberColumn(format="%d шт", disabled=True),
             "В пути к клиенту": st.column_config.NumberColumn(format="%d шт", disabled=True),
-            "FBO в пути":       st.column_config.NumberColumn(format="%d шт", min_value=0),
-            "Общий остаток":    st.column_config.NumberColumn(format="%d шт", disabled=True),
-            "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f", disabled=True),
-            "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн", disabled=True),
-            "Статус":           st.column_config.TextColumn(disabled=True),
+            "FBO в пути":       st.column_config.NumberColumn(
+                format="%d шт", min_value=0,
+                help="Складқа баратын поставка данасын осы жерге жазыңыз"
+            ),
         }
     )
 
-    # Пересчёт после ввода FBO
-    edited["Общий остаток"] = edited["Остаток"] + edited["В пути к клиенту"] + edited["FBO в пути"]
-    edited["Оборачиваемость"] = edited.apply(
+    st.divider()
+
+    # Шаг 2: Пересчёт
+    result = edited.copy()
+    result = result.merge(df[["supplierArticle", "daily_avg"]], left_on="Артикул", right_on="supplierArticle", how="left").drop(columns="supplierArticle")
+    result["Общий остаток"] = result["Остаток"] + result["В пути к клиенту"] + result["FBO в пути"]
+    result["Ср. продаж/день"] = result["daily_avg"].round(1)
+    result["Оборачиваемость"] = result.apply(
         lambda r: round(r["Общий остаток"] / r["Ср. продаж/день"]) if r["Ср. продаж/день"] > 0 else None,
         axis=1
     )
+    result["Статус"] = result["Остаток"].apply(status_label)
+    result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
+                     "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
 
-    st.caption(f"Показано: {len(show)} позиций (с продажами за последние 20 дней)")
+    # Метрики
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📦 Общий остаток", f"{int(result['Общий остаток'].sum()):,} шт".replace(",", " "))
+    c2.metric("📊 Всего позиций", len(result))
+    c3.metric("🔴 Критические", int(result["Оборачиваемость"].dropna().apply(lambda x: x <= 10).sum()),
+              help="Оборачиваемость ≤ 10 дней")
+    c4.metric("⚫ Ноль остаток", int((result["Остаток"] == 0).sum()))
+
+    # Стилизованная таблица результатов
+    st.markdown("#### 📊 Итоговый отчёт")
+
+    def style_turnover(val):
+        if pd.isna(val): return ""
+        return "background-color: #FCEBEB; color: #A32D2D; font-weight: bold" if val <= 10 else ""
+
+    def style_status(val):
+        m = {
+            "Ноль":       "background-color: #FCEBEB; color: #A32D2D",
+            "Мало":       "background-color: #FAEEDA; color: #854F0B",
+            "Хорошо":     "background-color: #EAF3DE; color: #3B6D11",
+            "Достаточно": "background-color: #E6F1FB; color: #185FA5",
+        }
+        return m.get(val, "")
+
+    styled = (
+        result.style
+        .map(style_turnover, subset=["Оборачиваемость"])
+        .map(style_status, subset=["Статус"])
+    )
+
+    st.dataframe(styled, use_container_width=True, height=450,
+        column_config={
+            "Остаток":          st.column_config.NumberColumn(format="%d шт"),
+            "В пути к клиенту": st.column_config.NumberColumn(format="%d шт"),
+            "FBO в пути":       st.column_config.NumberColumn(format="%d шт"),
+            "Общий остаток":    st.column_config.NumberColumn(format="%d шт"),
+            "Ср. продаж/день":  st.column_config.NumberColumn(format="%.1f"),
+            "Оборачиваемость":  st.column_config.NumberColumn(format="%d дн"),
+        }
+    )
+    st.caption(f"Показано: {len(result)} позиций (с продажами за последние 20 дней)")
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        edited.to_excel(writer, index=False, sheet_name="Отчёт WB")
+        result.to_excel(writer, index=False, sheet_name="Отчёт WB")
     st.download_button(
         "⬇️ Скачать Excel",
         data=buf.getvalue(),
