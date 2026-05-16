@@ -236,20 +236,21 @@ def load_store_data(store):
             s30_df = pd.DataFrame(s30_raw) if s30_raw else pd.DataFrame()
             if not s30_df.empty and "date" in s30_df.columns:
                 s30_df["date"] = pd.to_datetime(s30_df["date"], errors="coerce")
-                # Нақты заказ күні бойынша соңғы 30 күнді аламыз
                 cutoff30 = pd.Timestamp.now() - pd.Timedelta(days=30)
+                # Сырой деректерді debug үшін сақтаймыз
+                st.session_state[f"raw_orders_{idx}"] = s30_df.copy()
+                # date бойынша сүземіз
                 s30_df = s30_df[s30_df["date"] >= cutoff30]
-                # Отмена болмағандарды аламыз
-                if "isCancel" in s30_df.columns:
-                    s30_df = s30_df[s30_df["isCancel"] == False]
                 s30_df["date_only"] = s30_df["date"].dt.date
                 s30_df["priceWithDisc"] = pd.to_numeric(
                     s30_df.get("priceWithDisc", 0), errors="coerce").fillna(0)
+                # Барлық заказдар (отмена қосқанда) — WB кабинетімен сай келу үшін
                 sales30 = s30_df.groupby("date_only").agg(
-                    qty=("date_only", "count"),
+                    qty_all=("date_only", "count"),
+                    qty_active=("isCancel", lambda x: (x == False).sum() if "isCancel" in s30_df.columns else len(x)),
                     revenue=("priceWithDisc", "sum")
                 ).reset_index()
-                sales30.columns = ["Дата", "Заказ (шт)", "Выручка (₸)"]
+                sales30.columns = ["Дата", "Барлық заказ (шт)", "Белсенді заказ (шт)", "Выручка (₸)"]
                 sales30 = sales30.sort_values("Дата")
     except Exception as e:
         errors.append(f"Аналитика: {e}")
