@@ -290,21 +290,21 @@ def show_store(store, df, sales30, filter_status, search):
         if sales30 is None or sales30.empty:
             st.info("Продажа деректері жоқ")
         else:
-            total_qty = int(sales30["Заказ (шт)"].sum())
+            total_qty = int(sales30["Барлық заказ (шт)"].sum())
             total_rev = sales30["Выручка (₸)"].sum()
             avg_day = total_qty / 30
-            best_day = sales30.loc[sales30["Заказ (шт)"].idxmax()]
+            best_day = sales30.loc[sales30["Барлық заказ (шт)"].idxmax()]
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("📦 Жалпы сатылды", f"{total_qty:,} шт".replace(",", " "))
+            c1.metric("📦 Жалпы заказ", f"{total_qty:,} шт".replace(",", " "))
             c2.metric("💰 Жалпы выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
             c3.metric("📈 Күндік орта", f"{avg_day:.1f} шт")
-            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Заказ (шт)']} шт")
+            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Барлық заказ (шт)']} шт")
 
             st.divider()
-            st.markdown("#### 📊 Күн бойынша сатылым (соңғы 30 күн)")
+            st.markdown("#### 📊 Күн бойынша заказдар (соңғы 30 күн)")
 
-            chart_df = sales30.set_index("Дата")[["Заказ (шт)"]]
+            chart_df = sales30.set_index("Дата")[["Барлық заказ (шт)"]]
             st.bar_chart(chart_df, height=350)
 
             st.markdown("#### 💰 Күн бойынша выручка (соңғы 30 күн)")
@@ -509,4 +509,3 @@ for i, (tab, store) in enumerate(zip(tabs, visible_stores)):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
-            
