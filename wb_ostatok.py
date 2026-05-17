@@ -150,29 +150,43 @@ def parse_remains(data):
 
 def fetch_report_detail(stats_key, date_from, date_to, store_name=""):
     """reportDetailByPeriod — финансы отчеті"""
-    url = "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod"
+    # v5 — жаңа отчёттар үшін (27 қарашадан бастап)
+    # v1 — ескі отчёттар үшін
+    urls = [
+        "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod",
+        "https://statistics-api.wildberries.ru/api/v1/supplier/reportDetailByPeriod",
+    ]
     all_rows = []
-    rrdid = 0
-    while True:
-        params = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
-            "rrdid": rrdid,
-            "limit": 100000
-        }
+    for url in urls:
         try:
-            data = wb_get_retry(url, stats_key, params, store_name=store_name)
-        except:
-            # v1 fallback
-            url_v1 = "https://statistics-api.wildberries.ru/api/v1/supplier/reportDetailByPeriod"
-            data = wb_get_retry(url_v1, stats_key, params, store_name=store_name)
-        if not data:
-            break
-        all_rows.extend(data)
-        rrdid = data[-1].get("rrd_id", 0)
-        if len(data) < 100000:
-            break
-        time.sleep(2)
+            rrdid = 0
+            while True:
+                params = {
+                    "dateFrom": date_from,
+                    "dateTo": date_to,
+                    "rrdid": rrdid,
+                    "limit": 100000
+                }
+                r = requests.get(url, headers={"Authorization": stats_key},
+                                 params=params, timeout=60)
+                if r.status_code == 404:
+                    break
+                if r.status_code == 429:
+                    time.sleep(65)
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                if not data:
+                    break
+                all_rows.extend(data)
+                rrdid = data[-1].get("rrd_id", 0)
+                if len(data) < 100000:
+                    break
+                time.sleep(2)
+            if all_rows:
+                break
+        except Exception:
+            continue
     return all_rows
 
 def parse_finance(rows):
