@@ -193,52 +193,55 @@ def parse_finance(rows):
     """Финансы деректерін парсинг"""
     if not rows:
         return {}
-    df = pd.DataFrame(rows)
     result = {
-        "for_pay": 0,        # К перечислению
-        "ads": 0,            # Удержания (реклама)
+        "for_pay": 0,        # К перечислению (продажа ppvz_for_pay)
+        "ads": 0,            # Удержания (реклама WB)
         "storage": 0,        # Хранение
         "penalty": 0,        # Штраф
-        "vozvrat": 0,        # Возврат сомасы
+        "logistic": 0,       # Логистика (доставка)
+        "vozvrat": 0,        # Возврат ppvz
         "vozvrat_qty": 0,    # Возврат дана саны
         "total_qty": 0,      # Жалпы сатылды
         "by_article": {}     # Артикул бойынша
     }
-    if "supplier_oper_name" not in df.columns:
-        return result
 
-    for _, row in df.iterrows():
-        oper = str(row.get("supplier_oper_name", "")).upper()
+    for row in rows:
+        oper = str(row.get("supplier_oper_name", "")).strip()
+        oper_up = oper.upper()
         ppvz = float(row.get("ppvz_for_pay", 0) or 0)
         deduct = float(row.get("deduction", 0) or 0)
         storage_fee = float(row.get("storage_fee", 0) or 0)
-        penalty = float(row.get("penalty", 0) or 0)
+        penalty_val = float(row.get("penalty", 0) or 0)
+        delivery_rub = float(row.get("delivery_rub", 0) or 0)
         qty = int(row.get("quantity", 0) or 0)
-        article = str(row.get("sa_name", "") or row.get("supplierArticle", ""))
+        article = str(row.get("sa_name", "") or "").strip()
 
-        if "ПРОДАЖА" in oper or oper == "ПРОДАЖА":
+        if oper_up == "ПРОДАЖА":
             result["for_pay"] += ppvz
             result["total_qty"] += qty
+            result["logistic"] += abs(delivery_rub)
             if article:
                 if article not in result["by_article"]:
                     result["by_article"][article] = {"qty": 0, "for_pay": 0, "vozvrat": 0}
                 result["by_article"][article]["qty"] += qty
                 result["by_article"][article]["for_pay"] += ppvz
 
-        elif "ВОЗВРАТ" in oper:
+        elif oper_up == "ВОЗВРАТ":
             result["vozvrat"] += abs(ppvz)
             result["vozvrat_qty"] += qty
+            result["logistic"] += abs(delivery_rub)
             if article and article in result["by_article"]:
                 result["by_article"][article]["vozvrat"] += abs(ppvz)
 
-        elif "ХРАНЕНИЕ" in oper:
+        elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
 
-        elif "ШТРАФ" in oper or "УДЕРЖАНИЕ" in oper:
-            if "УДЕРЖАНИ" in oper and "РЕКЛАМ" in oper:
-                result["ads"] += abs(deduct) + abs(ppvz)
-            else:
-                result["penalty"] += abs(deduct) + abs(ppvz)
+        elif "ШТРАФ" in oper_up:
+            result["penalty"] += abs(penalty_val) + abs(deduct)
+
+        elif "УДЕРЖАНИЕ" in oper_up:
+            # Реклама WB удержания
+            result["ads"] += abs(deduct) + abs(ppvz)
 
     return result
 
@@ -427,12 +430,13 @@ def show_finance_tab(store, df):
     ads = fin.get("ads", 0)
     storage = fin.get("storage", 0)
     penalty = fin.get("penalty", 0)
+    logistic_auto = fin.get("logistic", 0)  # WB-дан автоматты
     vozvrat = fin.get("vozvrat", 0)
     vozvrat_qty = fin.get("vozvrat_qty", 0)
     total_qty = fin.get("total_qty", 0)
     vozvrat_shygyn = vozvrat * 2
 
-    logistic = man["logistic"]
+    logistic = man["logistic"]  # қолмен — складқа дейінгі жеткізу
     samovykup = man["samovykup"]
     reklama_napay = man["reklama_napay"]
 
@@ -480,6 +484,7 @@ def show_finance_tab(store, df):
         rows_ui = [
             ("авто", "К перечислению", fmt(for_pay), "blue"),
             ("авто", "Удержания (реклама WB)", f"- {fmt(ads)}", "red"),
+            ("авто", "Логистика WB (жеткізу)", f"- {fmt(logistic_auto)}", "red"),
             ("авто", "Хранение", f"- {fmt(storage)}", "red"),
             ("авто", "Штраф", f"- {fmt(penalty)}", "red"),
             ("авто", f"Возврат × 2 ({fmtN(vozvrat_qty)} шт)", f"- {fmt(vozvrat_shygyn)}", "red"),
@@ -509,7 +514,7 @@ def show_finance_tab(store, df):
 
         # Қолмен
         if role == "manager":
-            new_log = st.number_input("[қол] Логистика (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
+            new_log = st.number_input("[қол] Логистика до склада (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
             new_rek = st.number_input("[қол] Реклама на пэй (сыртқы, ₸)", value=float(man["reklama_napay"]), min_value=0.0, step=1000.0, key=f"rek_{idx}")
             if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"]:
@@ -517,7 +522,7 @@ def show_finance_tab(store, df):
                 st.rerun()
         else:
             r1, r2 = st.columns([3, 2])
-            r1.caption("[қол] Логистика"); r2.markdown(f"<p style='text-align:right;'>- {fmt(logistic)}</p>", unsafe_allow_html=True)
+            r1.caption("[қол] Логистика до склада"); r2.markdown(f"<p style='text-align:right;'>- {fmt(logistic)}</p>", unsafe_allow_html=True)
             r1, r2 = st.columns([3, 2])
             r1.caption("[қол] Самовыкуп"); r2.markdown(f"<p style='text-align:right;'>- {fmt(samovykup)}</p>", unsafe_allow_html=True)
             r1, r2 = st.columns([3, 2])
