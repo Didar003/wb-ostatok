@@ -405,13 +405,16 @@ def show_finance_tab(store, df):
                     st.sidebar.caption(f"Бірінші жол өрістері: {list(rows[0].keys())}")
                     opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
                     st.sidebar.caption(f"Операция түрлері: {opers}")
-                    # Логистика жолын тап
-                    log_rows = [r for r in rows if str(r.get("supplier_oper_name","")).upper() == "ЛОГИСТИКА"]
-                    if log_rows:
-                        r0 = log_rows[0]
-                        st.sidebar.caption(f"Логистика жолы: ppvz={r0.get('ppvz_for_pay')}, deduction={r0.get('deduction')}, delivery_rub={r0.get('delivery_rub')}, storage_fee={r0.get('storage_fee')}")
+                    # Барлық операция атауларын көрсет
+                    all_opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
+                    st.sidebar.caption(f"Барлық операциялар: {all_opers}")
+                    # delivery_rub > 0 болған жолдарды тап
+                    del_rows = [r for r in rows if float(r.get("delivery_rub", 0) or 0) != 0]
+                    if del_rows:
+                        r0 = del_rows[0]
+                        st.sidebar.caption(f"delivery_rub жолы: oper={r0.get('supplier_oper_name')}, delivery_rub={r0.get('delivery_rub')}, ppvz={r0.get('ppvz_for_pay')}, deduction={r0.get('deduction')}")
                     else:
-                        st.sidebar.caption("Логистика жолы табылмады!")
+                        st.sidebar.caption("delivery_rub > 0 жол табылмады!")
                 fin = parse_finance(rows)
                 st.session_state[fin_key] = fin
             except Exception as e:
