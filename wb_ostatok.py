@@ -470,7 +470,7 @@ def show_finance_tab(store, df):
     tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
     upakovka = tot_qty_sold * 100
 
-    napay = for_pay - ads - storage - penalty - vozvrat_shygyn
+    napay = for_pay - ads - logistic_auto - storage - penalty - vozvrat_shygyn
     ndv_rate = 16/116
     ndv_total = napay * ndv_rate
     ndv_prikhod = tot_seb * ndv_rate
