@@ -397,6 +397,14 @@ def show_finance_tab(store, df):
                     date_to.strftime("%Y-%m-%d"),
                     store_name=name
                 )
+                st.sidebar.info(f"📊 Жолдар саны: {len(rows)}")
+                if rows:
+                    # Бірінші жолдың өрістерін көрсету
+                    import json as _json
+                    st.sidebar.caption(f"Бірінші жол өрістері: {list(rows[0].keys())[:8]}")
+                    # Операция түрлерін көрсету
+                    opers = list(set(str(r.get("supplier_oper_name","")) for r in rows[:50]))
+                    st.sidebar.caption(f"Операция түрлері: {opers[:5]}")
                 fin = parse_finance(rows)
                 st.session_state[fin_key] = fin
             except Exception as e:
@@ -814,3 +822,4 @@ for tab, store in zip(tabs, visible_stores):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
+            
