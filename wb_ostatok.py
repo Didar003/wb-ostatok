@@ -405,16 +405,23 @@ def show_finance_tab(store, df):
                     st.sidebar.caption(f"Бірінші жол өрістері: {list(rows[0].keys())}")
                     opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
                     st.sidebar.caption(f"Операция түрлері: {opers}")
-                    # Барлық операция атауларын көрсет
+                    # Барлық өріс атауларын көрсет
                     all_opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
-                    st.sidebar.caption(f"Барлық операциялар: {all_opers}")
-                    # delivery_rub > 0 болған жолдарды тап
+                    st.sidebar.caption(f"Операциялар: {all_opers}")
+                    # Барлық delivery өрістерін тап
                     del_rows = [r for r in rows if float(r.get("delivery_rub", 0) or 0) != 0]
+                    del_amt_rows = [r for r in rows if float(r.get("delivery_amount", 0) or 0) != 0]
+                    st.sidebar.caption(f"delivery_rub > 0: {len(del_rows)} жол, delivery_amount > 0: {len(del_amt_rows)} жол")
                     if del_rows:
                         r0 = del_rows[0]
-                        st.sidebar.caption(f"delivery_rub жолы: oper={r0.get('supplier_oper_name')}, delivery_rub={r0.get('delivery_rub')}, ppvz={r0.get('ppvz_for_pay')}, deduction={r0.get('deduction')}")
-                    else:
-                        st.sidebar.caption("delivery_rub > 0 жол табылмады!")
+                        st.sidebar.caption(f"delivery_rub жолы: oper='{r0.get('supplier_oper_name')}', val={r0.get('delivery_rub')}")
+                    if del_amt_rows:
+                        r0 = del_amt_rows[0]
+                        st.sidebar.caption(f"delivery_amount жолы: oper='{r0.get('supplier_oper_name')}', val={r0.get('delivery_amount')}")
+                    # AK бағаны delivery_amount болуы мүмкін — жалпы сомасын есепте
+                    total_del = sum(abs(float(r.get("delivery_rub", 0) or 0)) for r in rows)
+                    total_del_amt = sum(abs(float(r.get("delivery_amount", 0) or 0)) for r in rows)
+                    st.sidebar.caption(f"delivery_rub жалпы: {total_del:.0f}, delivery_amount жалпы: {total_del_amt:.0f}")
                 fin = parse_finance(rows)
                 st.session_state[fin_key] = fin
             except Exception as e:
