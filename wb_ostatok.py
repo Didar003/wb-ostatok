@@ -423,7 +423,11 @@ def show_finance_tab(store, df):
                     total_del_amt = sum(abs(float(r.get("delivery_amount", 0) or 0)) for r in rows)
                     st.sidebar.caption(f"delivery_rub жалпы: {total_del:.0f}, delivery_amount жалпы: {total_del_amt:.0f}")
                 fin = parse_finance(rows)
+                # Кэшті толық жаңарту үшін алдымен өшіреміз
+                if fin_key in st.session_state:
+                    del st.session_state[fin_key]
                 st.session_state[fin_key] = fin
+                st.sidebar.success(f"✅ Жүктелді: {len(rows)} жол")
             except Exception as e:
                 st.error(f"Қате: {e}")
 
