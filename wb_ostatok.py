@@ -435,7 +435,9 @@ def show_finance_tab(store, df):
                 if fin_key in st.session_state:
                     del st.session_state[fin_key]
                 st.session_state[fin_key] = fin
-                st.sidebar.success(f"✅ Жүктелді: {len(rows)} жол")
+                log_count = fin.get("_log_count", 0)
+                log_sum = fin.get("logistic", 0)
+                st.sidebar.success(f"✅ Жүктелді: {len(rows)} жол | Лог жолдар: {log_count} | Логистика: {log_sum:,.0f} ₸")
                 st.rerun()
             except Exception as e:
                 st.error(f"Қате: {e}")
