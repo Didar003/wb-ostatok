@@ -236,9 +236,15 @@ def parse_finance(rows):
             result["logistic"] += abs(delivery_rub)
 
         elif "ОБРАБОТКА" in oper_up:
-            # "Операции на приемке" — acceptance өрісі
-            acceptance = float(row.get("acceptance", 0) or 0)
-            result["priemka"] += abs(acceptance)
+            # "Операции на приемке" — assembly_id емес, сандық өрістен аламыз
+            # Excel: "Операции на приемке" → API: "acceptance" немесе "assembly_id"
+            priemka_val = (
+                abs(float(row.get("acceptance", 0) or 0)) or
+                abs(float(row.get("assembly_id", 0) or 0)) or
+                abs(float(row.get("ppvz_for_pay", 0) or 0)) or
+                abs(float(row.get("deduction", 0) or 0))
+            )
+            result["priemka"] += priemka_val
 
         elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
