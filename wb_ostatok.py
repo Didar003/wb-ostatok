@@ -437,7 +437,13 @@ def show_finance_tab(store, df):
                 st.session_state[fin_key] = fin
                 log_count = fin.get("_log_count", 0)
                 log_sum = fin.get("logistic", 0)
-                st.sidebar.success(f"✅ Жүктелді: {len(rows)} жол | Лог жолдар: {log_count} | Логистика: {log_sum:,.0f} ₸")
+                # Логистика жолының барлық өрістерін тексер
+                log_rows = [r for r in rows if str(r.get("supplier_oper_name","")).strip().upper() == "ЛОГИСТИКА"]
+                if log_rows:
+                    r0 = log_rows[0]
+                    fields = {k: v for k, v in r0.items() if isinstance(v, (int, float)) and v != 0}
+                    st.sidebar.write(f"Лог жол өрістері (0 емес): {fields}")
+                st.sidebar.success(f"✅ {len(rows)} жол | Лог: {log_count} жол | Логистика: {log_sum:,.0f} ₸")
                 st.rerun()
             except Exception as e:
                 st.error(f"Қате: {e}")
