@@ -436,6 +436,7 @@ def show_finance_tab(store, df):
                     del st.session_state[fin_key]
                 st.session_state[fin_key] = fin
                 st.sidebar.success(f"✅ Жүктелді: {len(rows)} жол")
+                st.rerun()
             except Exception as e:
                 st.error(f"Қате: {e}")
 
