@@ -219,7 +219,6 @@ def parse_finance(rows):
         if oper_up == "ПРОДАЖА":
             result["for_pay"] += ppvz
             result["total_qty"] += qty
-            result["logistic"] += abs(delivery_rub)
             if article:
                 if article not in result["by_article"]:
                     result["by_article"][article] = {"qty": 0, "for_pay": 0, "vozvrat": 0}
@@ -229,9 +228,12 @@ def parse_finance(rows):
         elif oper_up == "ВОЗВРАТ":
             result["vozvrat"] += abs(ppvz)
             result["vozvrat_qty"] += qty
-            result["logistic"] += abs(delivery_rub)
             if article and article in result["by_article"]:
                 result["by_article"][article]["vozvrat"] += abs(ppvz)
+
+        elif oper_up == "ЛОГИСТИКА" or "ДОСТАВК" in oper_up:
+            # "Услуги по доставке товара покупателю"
+            result["logistic"] += abs(delivery_rub)
 
         elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
@@ -243,6 +245,11 @@ def parse_finance(rows):
             # Реклама WB удержания
             result["ads"] += abs(deduct) + abs(ppvz)
 
+    # Егер логистика API-да жеке операция ретінде келмесе
+    # барлық жолдан delivery_rub жалпысын аламыз (резервтік)
+    if result["logistic"] == 0:
+        for row in rows:
+            result["logistic"] += abs(float(row.get("delivery_rub", 0) or 0))
     return result
 
 def status_label(q):
