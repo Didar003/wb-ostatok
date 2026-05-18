@@ -199,6 +199,7 @@ def parse_finance(rows):
         "storage": 0,        # Хранение
         "penalty": 0,        # Штраф
         "logistic": 0,       # Логистика (доставка)
+        "priemka": 0,        # Операции на приёмке
         "vozvrat": 0,        # Возврат ppvz
         "vozvrat_qty": 0,    # Возврат дана саны
         "total_qty": 0,      # Жалпы сатылды
