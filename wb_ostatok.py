@@ -626,62 +626,86 @@ def show_finance_tab(store, df):
 
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            # 1-бет: Жалпы отчет
-            general = pd.DataFrame([{
-                "Көрсеткіш": "К перечислению",        "Сома (₸)": round(for_pay),
-            }, {
-                "Көрсеткіш": "Удержания (реклама WB)", "Сома (₸)": -round(ads),
-            }, {
-                "Көрсеткіш": "Логистика WB",           "Сома (₸)": -round(logistic_auto),
-            }, {
-                "Көрсеткіш": "Хранение",               "Сома (₸)": -round(storage),
-            }, {
-                "Көрсеткіш": "Операции на приёмке",    "Сома (₸)": -round(priemka),
-            }, {
-                "Көрсеткіш": "Штраф",                  "Сома (₸)": -round(penalty),
-            }, {
-                "Көрсеткіш": "Возврат × 2",            "Сома (₸)": -round(vozvrat_shygyn),
-            }, {
-                "Көрсеткіш": "На пэй",                 "Сома (₸)": round(napay),
-            }, {
-                "Көрсеткіш": "НДС наше",               "Сома (₸)": -round(ndv_nashe),
-            }, {
-                "Көрсеткіш": "Себестоимость",          "Сома (₸)": -round(tot_seb),
-            }, {
-                "Көрсеткіш": "Упаковка",               "Сома (₸)": -round(upakovka),
-            }, {
-                "Көрсеткіш": "Логистика до склада",    "Сома (₸)": -round(logistic),
-            }, {
-                "Көрсеткіш": "Самовыкуп",              "Сома (₸)": -round(samovykup),
-            }, {
-                "Көрсеткіш": "Реклама на пэй",         "Сома (₸)": -round(reklama_napay),
-            }, {
-                "Көрсеткіш": "До ИПН",                 "Сома (₸)": round(do_ipn),
-            }, {
-                "Көрсеткіш": "ИПН 10%",               "Сома (₸)": -round(ipn),
-            }, {
-                "Көрсеткіш": "ТАЗА ПАЙДА",             "Сома (₸)": round(profit),
-            }, {
-                "Көрсеткіш": "Рентабельность",         "Сома (₸)": f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%",
-            }])
-            general.to_excel(writer, index=False, sheet_name="Жалпы отчет")
+            from openpyxl.styles import Font, PatternFill, Alignment
+            wb_excel = writer.book
+            ws = wb_excel.create_sheet("Финансы отчет")
+            wb_excel.active = ws
 
-            # 2-бет: Тауар бойынша
-            pd.DataFrame(excel_rows).to_excel(writer, index=False, sheet_name="Тауар бойынша")
+            row = 1
+            # ── ЖАЛПЫ ОТЧЕТ ──
+            ws.cell(row, 1, "ЖАЛПЫ ОТЧЕТ").font = Font(bold=True, size=12)
+            row += 1
+            general_data = [
+                ("К перечислению",       round(for_pay)),
+                ("Удержания (реклама)",  -round(ads)),
+                ("Логистика WB",         -round(logistic_auto)),
+                ("Хранение",             -round(storage)),
+                ("Операции на приёмке",  -round(priemka)),
+                ("Штраф",                -round(penalty)),
+                ("Возврат × 2",          -round(vozvrat_shygyn)),
+                ("На пэй",               round(napay)),
+                ("НДС наше",             -round(ndv_nashe)),
+                ("Себестоимость",        -round(tot_seb)),
+                ("Упаковка",             -round(upakovka)),
+                ("Логистика до склада",  -round(logistic)),
+                ("Самовыкуп",           -round(samovykup)),
+                ("Реклама на пэй",       -round(reklama_napay)),
+                ("До ИПН",               round(do_ipn)),
+                ("ИПН 10%",             -round(ipn)),
+                ("ТАЗА ПАЙДА",           round(profit)),
+                ("Рентабельность",       f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%"),
+            ]
+            for label, val in general_data:
+                c1 = ws.cell(row, 1, label)
+                c2 = ws.cell(row, 2, val)
+                if label in ("На пэй", "ТАЗА ПАЙДА"):
+                    c1.font = Font(bold=True)
+                    c2.font = Font(bold=True)
+                row += 1
 
-            # 3-бет: Себестоимость
-            seb_rows = []
+            row += 1
+            # ── ТАУАР БОЙЫНША ──
+            ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = Font(bold=True, size=12)
+            row += 1
+            headers = ["Артикул", "Сатылды (шт)", "WB түскен (₸)", "Себест/шт (₸)", "Реклама (₸)", "Таза пайда (₸)", "Рентабельность (%)"]
+            for col, h in enumerate(headers, 1):
+                ws.cell(row, col, h).font = Font(bold=True)
+            row += 1
+            for r in excel_rows:
+                ws.cell(row, 1, r["Артикул"])
+                ws.cell(row, 2, r["Сатылды (шт)"])
+                ws.cell(row, 3, r["WB түскен (₸)"])
+                ws.cell(row, 4, r["Себест/шт (₸)"])
+                ws.cell(row, 5, r["Реклама (₸)"])
+                ws.cell(row, 6, r["Таза пайда (₸)"])
+                ws.cell(row, 7, r["Рентабельность (%)"])
+                if r["Артикул"] == "ЖАЛПЫ":
+                    for col in range(1, 8):
+                        ws.cell(row, col).font = Font(bold=True)
+                row += 1
+
+            row += 1
+            # ── СЕБЕСТОИМОСТЬ ──
+            ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = Font(bold=True, size=12)
+            row += 1
+            seb_headers = ["Артикул", "Сатылды (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Жалпы (₸)"]
+            for col, h in enumerate(seb_headers, 1):
+                ws.cell(row, col, h).font = Font(bold=True)
+            row += 1
             for art, data in by_article.items():
                 qty_a = data.get("qty", 0)
                 sebest_a = seb_data.get(art, 0)
-                seb_rows.append({
-                    "Артикул": art,
-                    "Сатылды (шт)": qty_a,
-                    "Себест/шт (₸)": sebest_a,
-                    "Упаковка (₸)": qty_a * 100,
-                    "Жалпы (₸)": qty_a * sebest_a,
-                })
-            pd.DataFrame(seb_rows).to_excel(writer, index=False, sheet_name="Себестоимость")
+                ws.cell(row, 1, art)
+                ws.cell(row, 2, qty_a)
+                ws.cell(row, 3, sebest_a)
+                ws.cell(row, 4, qty_a * 100)
+                ws.cell(row, 5, qty_a * sebest_a)
+                row += 1
+
+            # Баған енін реттеу
+            ws.column_dimensions["A"].width = 25
+            for col in ["B","C","D","E","F","G"]:
+                ws.column_dimensions[col].width = 18
 
         period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
         st.download_button(
