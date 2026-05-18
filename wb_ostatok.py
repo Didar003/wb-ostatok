@@ -625,89 +625,121 @@ def show_finance_tab(store, df):
         excel_rows.append(summary)
 
         buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            # Dummy sheet жасаймыз — кейін аламыз
-            pd.DataFrame().to_excel(writer, sheet_name="_tmp", index=False)
-            from openpyxl.styles import Font, PatternFill, Alignment
-            wb_excel = writer.book
-            ws = wb_excel.create_sheet("Финансы отчет")
-            wb_excel.active = ws
+        import openpyxl as _oxl
+        from openpyxl.styles import Font, PatternFill, Border, Side
+        _wb2 = _oxl.Workbook()
+        ws = _wb2.active
+        ws.title = "Финансы отчет"
 
-            row = 1
-            # ── ЖАЛПЫ ОТЧЕТ ──
-            ws.cell(row, 1, "ЖАЛПЫ ОТЧЕТ").font = Font(bold=True, size=12)
-            row += 1
-            general_data = [
-                ("К перечислению",       round(for_pay)),
-                ("Удержания (реклама)",  -round(ads)),
-                ("Логистика WB",         -round(logistic_auto)),
-                ("Хранение",             -round(storage)),
-                ("Операции на приёмке",  -round(priemka)),
-                ("Штраф",                -round(penalty)),
-                ("Возврат × 2",          -round(vozvrat_shygyn)),
-                ("На пэй",               round(napay)),
-                ("НДС наше",             -round(ndv_nashe)),
-                ("Себестоимость",        -round(tot_seb)),
-                ("Упаковка",             -round(upakovka)),
-                ("Логистика до склада",  -round(logistic)),
-                ("Самовыкуп",           -round(samovykup)),
-                ("Реклама на пэй",       -round(reklama_napay)),
-                ("До ИПН",               round(do_ipn)),
-                ("ИПН 10%",             -round(ipn)),
-                ("ТАЗА ПАЙДА",           round(profit)),
-                ("Рентабельность",       f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%"),
-            ]
-            for label, val in general_data:
-                c1 = ws.cell(row, 1, label)
-                c2 = ws.cell(row, 2, val)
-                if label in ("На пэй", "ТАЗА ПАЙДА"):
-                    c1.font = Font(bold=True)
-                    c2.font = Font(bold=True)
-                row += 1
+        GREEN_FILL       = PatternFill("solid", fgColor="92D050")
+        LIGHT_GREEN_FILL = PatternFill("solid", fgColor="E2EFDA")
+        BLUE_FILL        = PatternFill("solid", fgColor="BDD7EE")
+        RED_FILL         = PatternFill("solid", fgColor="FF7F7F")
+        BOLD   = Font(bold=True)
+        BOLD12 = Font(bold=True, size=12)
 
-            row += 1
-            # ── ТАУАР БОЙЫНША ──
-            ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = Font(bold=True, size=12)
-            row += 1
-            headers = ["Артикул", "Сатылды (шт)", "WB түскен (₸)", "Себест/шт (₸)", "Реклама (₸)", "Таза пайда (₸)", "Рентабельность (%)"]
-            for col, h in enumerate(headers, 1):
-                ws.cell(row, col, h).font = Font(bold=True)
-            row += 1
-            for r in excel_rows:
-                ws.cell(row, 1, r["Артикул"])
-                ws.cell(row, 2, r["Сатылды (шт)"])
-                ws.cell(row, 3, r["WB түскен (₸)"])
-                ws.cell(row, 4, r["Себест/шт (₸)"])
-                ws.cell(row, 5, r["Реклама (₸)"])
-                ws.cell(row, 6, r["Таза пайда (₸)"])
-                ws.cell(row, 7, r["Рентабельность (%)"])
-                if r["Артикул"] == "ЖАЛПЫ":
-                    for col in range(1, 8):
-                        ws.cell(row, col).font = Font(bold=True)
-                row += 1
+        def thin_border():
+            s = Side(style="thin")
+            return Border(left=s, right=s, top=s, bottom=s)
 
-            row += 1
-            # ── СЕБЕСТОИМОСТЬ ──
-            ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = Font(bold=True, size=12)
-            row += 1
-            seb_headers = ["Артикул", "Сатылды (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Жалпы (₸)"]
-            for col, h in enumerate(seb_headers, 1):
-                ws.cell(row, col, h).font = Font(bold=True)
-            row += 1
-            for art, data in by_article.items():
-                qty_a = data.get("qty", 0)
-                sebest_a = seb_data.get(art, 0)
-                ws.cell(row, 1, art)
-                ws.cell(row, 2, qty_a)
-                ws.cell(row, 3, sebest_a)
-                ws.cell(row, 4, qty_a * 100)
-                ws.cell(row, 5, qty_a * sebest_a)
-                row += 1
+        def apply_border(ws, min_row, max_row, min_col, max_col):
+            for r in range(min_row, max_row+1):
+                for c in range(min_col, max_col+1):
+                    ws.cell(r, c).border = thin_border()
 
-            # Баған енін реттеу
-            ws.column_dimensions["A"].width = 25
-            for col in ["B","C","D","E","F","G"]:
-                ws.column_dimensions[col].width = 18
+        row = 1
+        # ── ЖАЛПЫ ОТЧЕТ ──
+        ws.cell(row, 1, "ЖАЛПЫ ОТЧЕТ").font = BOLD12
+        row += 1
+        general_data = [
+            ("К перечислению",      round(for_pay),         None,        False),
+            ("Удержания (реклама)", -round(ads),             None,        False),
+            ("Логистика WB",        -round(logistic_auto),  None,        False),
+            ("Хранение",            -round(storage),        None,        False),
+            ("Операции на приёмке", -round(priemka),        None,        False),
+            ("Штраф",               -round(penalty),        None,        False),
+            ("Возврат × 2",         -round(vozvrat_shygyn), None,        False),
+            ("На пэй",              round(napay),           BLUE_FILL,   True),
+            ("НДС наше",            -round(ndv_nashe),      None,        False),
+            ("Себестоимость",       -round(tot_seb),        None,        False),
+            ("Упаковка",            -round(upakovka),       None,        False),
+            ("Логистика до склада", -round(logistic),       None,        False),
+            ("Самовыкуп",           -round(samovykup),      None,        False),
+            ("Реклама на пэй",      -round(reklama_napay),  None,        False),
+            ("До ИПН",              round(do_ipn),          None,        False),
+            ("ИПН 10%",             -round(ipn),            None,        False),
+            ("ТАЗА ПАЙДА",          round(profit),          "profit",    True),
+            ("Рентабельность",      f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%", "profit", False),
+        ]
+        gen_start = row
+        for label, val, fill, bold in general_data:
+            c1 = ws.cell(row, 1, label)
+            c2 = ws.cell(row, 2, val)
+            actual_fill = (GREEN_FILL if profit >= 0 else RED_FILL) if fill == "profit" else fill
+            if actual_fill:
+                c1.fill = actual_fill
+                c2.fill = actual_fill
+            if bold:
+                c1.font = BOLD
+                c2.font = BOLD
+            row += 1
+        apply_border(ws, gen_start, row-1, 1, 2)
+
+        row += 1
+        # ── ТАУАР БОЙЫНША ──
+        ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = BOLD12
+        row += 1
+        prod_headers = ["Артикул", "Сатылды (шт)", "WB түскен (₸)", "Себест/шт (₸)", "Реклама (₸)", "Таза пайда (₸)", "Рентабельность (%)"]
+        prod_hdr_row = row
+        for col, h in enumerate(prod_headers, 1):
+            c = ws.cell(row, col, h)
+            c.font = BOLD
+            c.fill = LIGHT_GREEN_FILL
+        row += 1
+        for r in excel_rows:
+            vals = [r["Артикул"], r["Сатылды (шт)"], r["WB түскен (₸)"],
+                    r["Себест/шт (₸)"], r["Реклама (₸)"], r["Таза пайда (₸)"], r["Рентабельность (%)"]]
+            for col, v in enumerate(vals, 1):
+                ws.cell(row, col, v)
+            pval = r["Таза пайда (₸)"]
+            if r["Артикул"] == "ЖАЛПЫ":
+                pf = GREEN_FILL if (profit >= 0) else RED_FILL
+                for col in range(1, 8):
+                    ws.cell(row, col).font = BOLD
+                    ws.cell(row, col).fill = pf
+            elif isinstance(pval, (int, float)) and pval < 0:
+                ws.cell(row, 6).fill = RED_FILL
+                ws.cell(row, 7).fill = RED_FILL
+            row += 1
+        apply_border(ws, prod_hdr_row, row-1, 1, 7)
+
+        row += 1
+        # ── СЕБЕСТОИМОСТЬ ──
+        ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = BOLD12
+        row += 1
+        seb_headers = ["Артикул", "Сатылды (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Жалпы (₸)"]
+        seb_hdr_row = row
+        for col, h in enumerate(seb_headers, 1):
+            c = ws.cell(row, col, h)
+            c.font = BOLD
+            c.fill = LIGHT_GREEN_FILL
+        row += 1
+        for art, data in by_article.items():
+            qty_a = data.get("qty", 0)
+            sebest_a = seb_data.get(art, 0)
+            ws.cell(row, 1, art)
+            ws.cell(row, 2, qty_a)
+            ws.cell(row, 3, sebest_a)
+            ws.cell(row, 4, qty_a * 100)
+            ws.cell(row, 5, qty_a * sebest_a)
+            row += 1
+        apply_border(ws, seb_hdr_row, row-1, 1, 5)
+
+        ws.column_dimensions["A"].width = 28
+        for col_ltr in ["B","C","D","E","F","G"]:
+            ws.column_dimensions[col_ltr].width = 18
+
+        _wb2.save(buf)
 
         period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
         st.download_button(
