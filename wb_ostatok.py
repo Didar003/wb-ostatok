@@ -430,42 +430,8 @@ def show_finance_tab(store, df):
                     date_to.strftime("%Y-%m-%d"),
                     store_name=name
                 )
-                st.sidebar.info(f"📊 Жолдар саны: {len(rows)}")
-                if rows:
-                    st.sidebar.caption(f"Бірінші жол өрістері: {list(rows[0].keys())}")
-                    opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
-                    st.sidebar.caption(f"Операция түрлері: {opers}")
-                    # Барлық өріс атауларын көрсет
-                    all_opers = list(set(str(r.get("supplier_oper_name","")) for r in rows))
-                    st.sidebar.caption(f"Операциялар: {all_opers}")
-                    # Барлық delivery өрістерін тап
-                    del_rows = [r for r in rows if float(r.get("delivery_rub", 0) or 0) != 0]
-                    del_amt_rows = [r for r in rows if float(r.get("delivery_amount", 0) or 0) != 0]
-                    st.sidebar.caption(f"delivery_rub > 0: {len(del_rows)} жол, delivery_amount > 0: {len(del_amt_rows)} жол")
-                    if del_rows:
-                        r0 = del_rows[0]
-                        st.sidebar.caption(f"delivery_rub жолы: oper='{r0.get('supplier_oper_name')}', val={r0.get('delivery_rub')}")
-                    if del_amt_rows:
-                        r0 = del_amt_rows[0]
-                        st.sidebar.caption(f"delivery_amount жолы: oper='{r0.get('supplier_oper_name')}', val={r0.get('delivery_amount')}")
-                    # AK бағаны delivery_amount болуы мүмкін — жалпы сомасын есепте
-                    total_del = sum(abs(float(r.get("delivery_rub", 0) or 0)) for r in rows)
-                    total_del_amt = sum(abs(float(r.get("delivery_amount", 0) or 0)) for r in rows)
-                    st.sidebar.caption(f"delivery_rub жалпы: {total_del:.0f}, delivery_amount жалпы: {total_del_amt:.0f}")
                 fin = parse_finance(rows)
-                # Кэшті толық жаңарту үшін алдымен өшіреміз
-                if fin_key in st.session_state:
-                    del st.session_state[fin_key]
                 st.session_state[fin_key] = fin
-                log_count = fin.get("_log_count", 0)
-                log_sum = fin.get("logistic", 0)
-                # Логистика жолының барлық өрістерін тексер
-                log_rows = [r for r in rows if str(r.get("supplier_oper_name","")).strip().upper() == "ЛОГИСТИКА"]
-                if log_rows:
-                    r0 = log_rows[0]
-                    fields = {k: v for k, v in r0.items() if isinstance(v, (int, float)) and v != 0}
-                    st.sidebar.write(f"Лог жол өрістері (0 емес): {fields}")
-                st.sidebar.success(f"✅ {len(rows)} жол | Лог: {log_count} жол | Логистика: {log_sum:,.0f} ₸")
                 st.rerun()
             except Exception as e:
                 st.error(f"Қате: {e}")
