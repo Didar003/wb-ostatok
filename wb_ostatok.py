@@ -582,6 +582,116 @@ def show_finance_tab(store, df):
         st.markdown(f"- Штраф: :red[{fmt(penalty)}]")
         st.markdown(f"- Упаковка жалпы: :red[{fmt(upakovka)}]")
 
+    # Excel жүктеу батырмасы
+    st.divider()
+    if by_article:
+        excel_rows = []
+        for art, data in by_article.items():
+            qty_a = data.get("qty", 0)
+            wb_a = data.get("for_pay", 0)
+            vozvrat_a = data.get("vozvrat", 0)
+            sebest_a = seb_data.get(art, 0)
+            reklama_a = ads_by_art.get(art, 0) if "ads_by_art" in dir() else 0
+            share = wb_a / for_pay if for_pay > 0 else 0
+            napay_a = wb_a - (ads*share) - (storage*share) - (priemka*share) - (vozvrat_a*2)
+            ndv_a = napay_a * ndv_rate
+            ndvpr_a = (sebest_a * qty_a) * ndv_rate
+            ndvn_a = ndv_a - ndvpr_a
+            pack_a = qty_a * 100
+            doipn_a = napay_a - ndvn_a - (sebest_a*qty_a) - pack_a - (logistic*share) - (samovykup*share) - reklama_a
+            ipn_a = doipn_a * 0.10 if doipn_a > 0 else 0
+            profit_a = doipn_a - ipn_a
+            pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
+            excel_rows.append({
+                "Артикул": art,
+                "Сатылды (шт)": qty_a,
+                "WB түскен (₸)": round(wb_a),
+                "Себест/шт (₸)": sebest_a,
+                "Реклама (₸)": reklama_a,
+                "Таза пайда (₸)": round(profit_a),
+                "Рентабельность (%)": round(pct_a, 1),
+            })
+
+        # Жалпы жол
+        summary = {
+            "Артикул": "ЖАЛПЫ",
+            "Сатылды (шт)": total_qty,
+            "WB түскен (₸)": round(for_pay),
+            "Себест/шт (₸)": "",
+            "Реклама (₸)": sum(r["Реклама (₸)"] for r in excel_rows),
+            "Таза пайда (₸)": round(profit),
+            "Рентабельность (%)": round(profit/for_pay*100, 1) if for_pay > 0 else 0,
+        }
+        excel_rows.append(summary)
+
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            # 1-бет: Жалпы отчет
+            general = pd.DataFrame([{
+                "Көрсеткіш": "К перечислению",        "Сома (₸)": round(for_pay),
+            }, {
+                "Көрсеткіш": "Удержания (реклама WB)", "Сома (₸)": -round(ads),
+            }, {
+                "Көрсеткіш": "Логистика WB",           "Сома (₸)": -round(logistic_auto),
+            }, {
+                "Көрсеткіш": "Хранение",               "Сома (₸)": -round(storage),
+            }, {
+                "Көрсеткіш": "Операции на приёмке",    "Сома (₸)": -round(priemka),
+            }, {
+                "Көрсеткіш": "Штраф",                  "Сома (₸)": -round(penalty),
+            }, {
+                "Көрсеткіш": "Возврат × 2",            "Сома (₸)": -round(vozvrat_shygyn),
+            }, {
+                "Көрсеткіш": "На пэй",                 "Сома (₸)": round(napay),
+            }, {
+                "Көрсеткіш": "НДС наше",               "Сома (₸)": -round(ndv_nashe),
+            }, {
+                "Көрсеткіш": "Себестоимость",          "Сома (₸)": -round(tot_seb),
+            }, {
+                "Көрсеткіш": "Упаковка",               "Сома (₸)": -round(upakovka),
+            }, {
+                "Көрсеткіш": "Логистика до склада",    "Сома (₸)": -round(logistic),
+            }, {
+                "Көрсеткіш": "Самовыкуп",              "Сома (₸)": -round(samovykup),
+            }, {
+                "Көрсеткіш": "Реклама на пэй",         "Сома (₸)": -round(reklama_napay),
+            }, {
+                "Көрсеткіш": "До ИПН",                 "Сома (₸)": round(do_ipn),
+            }, {
+                "Көрсеткіш": "ИПН 10%",               "Сома (₸)": -round(ipn),
+            }, {
+                "Көрсеткіш": "ТАЗА ПАЙДА",             "Сома (₸)": round(profit),
+            }, {
+                "Көрсеткіш": "Рентабельность",         "Сома (₸)": f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%",
+            }])
+            general.to_excel(writer, index=False, sheet_name="Жалпы отчет")
+
+            # 2-бет: Тауар бойынша
+            pd.DataFrame(excel_rows).to_excel(writer, index=False, sheet_name="Тауар бойынша")
+
+            # 3-бет: Себестоимость
+            seb_rows = []
+            for art, data in by_article.items():
+                qty_a = data.get("qty", 0)
+                sebest_a = seb_data.get(art, 0)
+                seb_rows.append({
+                    "Артикул": art,
+                    "Сатылды (шт)": qty_a,
+                    "Себест/шт (₸)": sebest_a,
+                    "Упаковка (₸)": qty_a * 100,
+                    "Жалпы (₸)": qty_a * sebest_a,
+                })
+            pd.DataFrame(seb_rows).to_excel(writer, index=False, sheet_name="Себестоимость")
+
+        period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
+        st.download_button(
+            f"⬇️ Excel жүктеу — {store['name']} ({period_str})",
+            data=buf.getvalue(),
+            file_name=f"Финансы_{store['name']}_{period_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"fin_dl_{idx}"
+        )
+
     st.divider()
 
     # ТАУАР БОЙЫНША
