@@ -417,6 +417,10 @@ def show_finance_tab(store, df):
             del st.session_state[fin_key]
         st.session_state[period_key] = current_period
 
+    # Ескі кэште priemka жоқ болса тазала
+    if fin_key in st.session_state and "priemka" not in st.session_state[fin_key]:
+        del st.session_state[fin_key]
+
     if load_fin:
         with st.spinner(f"[{name}] Финансы отчеті жүктелуде..."):
             try:
