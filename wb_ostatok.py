@@ -626,6 +626,8 @@ def show_finance_tab(store, df):
 
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            # Dummy sheet жасаймыз — кейін аламыз
+            pd.DataFrame().to_excel(writer, sheet_name="_tmp", index=False)
             from openpyxl.styles import Font, PatternFill, Alignment
             wb_excel = writer.book
             ws = wb_excel.create_sheet("Финансы отчет")
@@ -935,6 +937,8 @@ def show_store(store, df, sales30, filter_status, search):
 
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            # Dummy sheet жасаймыз — кейін аламыз
+            pd.DataFrame().to_excel(writer, sheet_name="_tmp", index=False)
             result.to_excel(writer, index=False, sheet_name="Остатки WB")
         st.download_button(f"⬇️ Excel — {store['name']}", data=buf.getvalue(),
             file_name=f"WB_{store['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
