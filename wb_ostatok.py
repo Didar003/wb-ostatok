@@ -391,6 +391,14 @@ def show_finance_tab(store, df):
     fin_key = f"finance_{idx}"
     use_key = finance_key if finance_key else stats_key
 
+    # Период өзгерсе кэшті тазала
+    period_key = f"fin_period_{idx}"
+    current_period = f"{date_from}_{date_to}"
+    if st.session_state.get(period_key) != current_period:
+        if fin_key in st.session_state:
+            del st.session_state[fin_key]
+        st.session_state[period_key] = current_period
+
     if load_fin:
         with st.spinner(f"[{name}] Финансы отчеті жүктелуде..."):
             try:
