@@ -541,16 +541,16 @@ def show_finance_tab(store, df):
 
         # Қолмен
         if role == "manager":
-            new_log_wb = st.number_input("[қол] Логистика WB — жеткізу (₸)", value=float(man.get("logistic_wb", 0)), min_value=0.0, step=1000.0, key=f"log_wb_{idx}", help="WB кабинетіндегі логистика сомасы")
             new_log = st.number_input("[қол] Логистика до склада (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
             new_rek = st.number_input("[қол] Реклама на пэй (сыртқы, ₸)", value=float(man["reklama_napay"]), min_value=0.0, step=1000.0, key=f"rek_{idx}")
-            if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"] or new_log_wb != man.get("logistic_wb", 0):
-                st.session_state[man_key] = {"logistic": new_log, "logistic_wb": new_log_wb, "samovykup": new_samo, "reklama_napay": new_rek}
+            if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"]:
+                st.session_state[man_key] = {"logistic": new_log, "samovykup": new_samo, "reklama_napay": new_rek}
                 st.rerun()
         else:
             r1, r2 = st.columns([3, 2])
-            r1.caption("[қол] Логистика до склада"); r2.markdown(f"<p style='text-align:right;'>- {fmt(logistic)}</p>", unsafe_allow_html=True)
+            r1.caption("[қол] Логистика до склада")
+            r2.markdown(f"<p style='text-align:right;'>- {fmt(logistic)}</p>", unsafe_allow_html=True)
             r1, r2 = st.columns([3, 2])
             r1.caption("[қол] Самовыкуп"); r2.markdown(f"<p style='text-align:right;'>- {fmt(samovykup)}</p>", unsafe_allow_html=True)
             r1, r2 = st.columns([3, 2])
@@ -585,6 +585,12 @@ def show_finance_tab(store, df):
     st.divider()
 
     # ТАУАР БОЙЫНША
+    # Тауар бойынша реклама деректерін оқу/сақтау
+    ads_key = f"ads_by_art_{idx}"
+    if ads_key not in st.session_state:
+        st.session_state[ads_key] = {}
+    ads_by_art = st.session_state[ads_key]
+
     if by_article:
         with st.expander("📦 Тауар бойынша таза пайда", expanded=True):
             prod_rows = []
@@ -593,13 +599,14 @@ def show_finance_tab(store, df):
                 wb_a = data.get("for_pay", 0)
                 vozvrat_a = data.get("vozvrat", 0)
                 sebest_a = seb_data.get(art, 0)
+                reklama_a = ads_by_art.get(art, 0)
                 share = wb_a / for_pay if for_pay > 0 else 0
-                napay_a = wb_a - (ads*share) - (storage*share) - (vozvrat_a*2)
+                napay_a = wb_a - (ads*share) - (storage*share) - (priemka*share) - (vozvrat_a*2)
                 ndv_a = napay_a * ndv_rate
                 ndvpr_a = (sebest_a * qty_a) * ndv_rate
                 ndvn_a = ndv_a - ndvpr_a
                 pack_a = qty_a * 100
-                doipn_a = napay_a - ndvn_a - (sebest_a*qty_a) - pack_a - (logistic*share) - (samovykup*share) - (reklama_napay*share)
+                doipn_a = napay_a - ndvn_a - (sebest_a*qty_a) - pack_a - (logistic*share) - (samovykup*share) - reklama_a
                 ipn_a = doipn_a * 0.10 if doipn_a > 0 else 0
                 profit_a = doipn_a - ipn_a
                 pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
@@ -608,7 +615,7 @@ def show_finance_tab(store, df):
                     "Сатылды (шт)": qty_a,
                     "WB түскен (₸)": round(wb_a),
                     "Себест/шт (₸)": sebest_a,
-                    "Упаковка (₸)": pack_a,
+                    "Реклама (₸)": reklama_a,
                     "Таза пайда (₸)": round(profit_a),
                     "%": round(pct_a, 1),
                 })
@@ -619,7 +626,34 @@ def show_finance_tab(store, df):
                 return "color: #3B6D11; font-weight: bold" if val >= 0 else "color: #A32D2D; font-weight: bold"
 
             styled = prod_df.style.map(style_profit, subset=["Таза пайда (₸)", "%"])
-            st.dataframe(styled, use_container_width=True, height=400)
+            st.dataframe(styled, use_container_width=True, height=400,
+                column_config={
+                    "WB түскен (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Реклама (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Таза пайда (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "%": st.column_config.NumberColumn(format="%.1f%%"),
+                })
+
+            # Реклама қолмен енгізу
+            if role == "manager":
+                st.divider()
+                st.caption("✏️ Реклама — тауар бойынша қолмен енгізіңіз")
+                ads_tbl = pd.DataFrame([
+                    {"Артикул": art, "Реклама (₸)": ads_by_art.get(art, 0)}
+                    for art in by_article.keys()
+                ])
+                ads_edited = st.data_editor(
+                    ads_tbl, use_container_width=True, height=400,
+                    key=f"ads_editor_{idx}",
+                    column_config={
+                        "Артикул": st.column_config.TextColumn(disabled=True),
+                        "Реклама (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
+                    }
+                )
+                new_ads = dict(zip(ads_edited["Артикул"], ads_edited["Реклама (₸)"]))
+                if new_ads != ads_by_art:
+                    st.session_state[ads_key] = new_ads
+                    st.rerun()
 
     st.divider()
 
