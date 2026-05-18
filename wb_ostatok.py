@@ -465,7 +465,7 @@ def show_finance_tab(store, df):
     ads = fin.get("ads", 0)
     storage = fin.get("storage", 0)
     penalty = fin.get("penalty", 0)
-    logistic_auto = fin.get("logistic", 0)  # WB-дан автоматты
+    logistic_auto = fin.get("logistic", 0)  # WB API-дан автоматты
     vozvrat = fin.get("vozvrat", 0)
     vozvrat_qty = fin.get("vozvrat_qty", 0)
     total_qty = fin.get("total_qty", 0)
@@ -520,6 +520,7 @@ def show_finance_tab(store, df):
             ("авто", "К перечислению", fmt(for_pay), "blue"),
             ("авто", "Удержания (реклама WB)", f"- {fmt(ads)}", "red"),
             ("авто", "Логистика WB (жеткізу)", f"- {fmt(logistic_auto)}", "red"),
+
             ("авто", "Хранение", f"- {fmt(storage)}", "red"),
             ("авто", "Штраф", f"- {fmt(penalty)}", "red"),
             ("авто", f"Возврат × 2 ({fmtN(vozvrat_qty)} шт)", f"- {fmt(vozvrat_shygyn)}", "red"),
@@ -549,11 +550,12 @@ def show_finance_tab(store, df):
 
         # Қолмен
         if role == "manager":
+            new_log_wb = st.number_input("[қол] Логистика WB — жеткізу (₸)", value=float(man.get("logistic_wb", 0)), min_value=0.0, step=1000.0, key=f"log_wb_{idx}", help="WB кабинетіндегі логистика сомасы")
             new_log = st.number_input("[қол] Логистика до склада (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
             new_rek = st.number_input("[қол] Реклама на пэй (сыртқы, ₸)", value=float(man["reklama_napay"]), min_value=0.0, step=1000.0, key=f"rek_{idx}")
-            if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"]:
-                st.session_state[man_key] = {"logistic": new_log, "samovykup": new_samo, "reklama_napay": new_rek}
+            if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"] or new_log_wb != man.get("logistic_wb", 0):
+                st.session_state[man_key] = {"logistic": new_log, "logistic_wb": new_log_wb, "samovykup": new_samo, "reklama_napay": new_rek}
                 st.rerun()
         else:
             r1, r2 = st.columns([3, 2])
