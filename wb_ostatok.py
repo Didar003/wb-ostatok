@@ -216,7 +216,7 @@ def parse_finance(rows):
         qty = int(row.get("quantity", 0) or 0)
         article = str(row.get("sa_name", "") or "").strip()
 
-        if oper_up == "ПРОДАЖА":
+        if oper_up in ("ПРОДАЖА", "ДОБРОВОЛЬНАЯ КОМПЕНСАЦИЯ ПРИ ВОЗВРАТЕ"):
             result["for_pay"] += ppvz
             result["total_qty"] += qty
             if article:
@@ -234,6 +234,11 @@ def parse_finance(rows):
         elif oper_up == "ЛОГИСТИКА" or "ДОСТАВК" in oper_up:
             # "Услуги по доставке товара покупателю"
             result["logistic"] += abs(delivery_rub)
+
+        elif "ОБРАБОТКА" in oper_up:
+            # "Операции на приемке" — acceptance өрісі
+            acceptance = float(row.get("acceptance", 0) or 0)
+            result["priemka"] += abs(acceptance)
 
         elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
@@ -498,7 +503,8 @@ def show_finance_tab(store, df):
     tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
     upakovka = tot_qty_sold * 100
 
-    napay = for_pay - ads - logistic_auto - storage - penalty - vozvrat_shygyn
+    priemka = fin.get("priemka", 0)
+    napay = for_pay - ads - logistic_auto - storage - priemka - penalty - vozvrat_shygyn
     ndv_rate = 16/116
     ndv_total = napay * ndv_rate
     ndv_prikhod = tot_seb * ndv_rate
@@ -529,6 +535,7 @@ def show_finance_tab(store, df):
             ("авто", "Логистика WB (жеткізу)", f"- {fmt(logistic_auto)}", "red"),
 
             ("авто", "Хранение", f"- {fmt(storage)}", "red"),
+            ("авто", "Операции на приёмке", f"- {fmt(priemka)}", "red"),
             ("авто", "Штраф", f"- {fmt(penalty)}", "red"),
             ("авто", f"Возврат × 2 ({fmtN(vozvrat_qty)} шт)", f"- {fmt(vozvrat_shygyn)}", "red"),
         ]
@@ -594,6 +601,7 @@ def show_finance_tab(store, df):
         st.markdown(f"- Возврат: :red[**{fmtN(vozvrat_qty)} шт**]")
         st.markdown(f"- Нақты: **{fmtN(total_qty - vozvrat_qty)} шт**")
         st.markdown(f"- Хранение: :red[{fmt(storage)}]")
+        st.markdown(f"- Операции на приёмке: :red[{fmt(priemka)}]")
         st.markdown(f"- Штраф: :red[{fmt(penalty)}]")
         st.markdown(f"- Упаковка жалпы: :red[{fmt(upakovka)}]")
 
