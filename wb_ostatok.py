@@ -737,7 +737,8 @@ def show_finance_tab(store, df):
                 sebest_a = seb_data.get(art, 0)
                 reklama_a = ads_by_art.get(art, 0)
                 share = wb_a / for_pay if for_pay > 0 else 0
-                napay_a = wb_a - (ads*share) - (storage*share) - (priemka*share) - (vozvrat_a*2)
+                # Тауар бойынша: удержания бөлінбейді — тек қолмен жазылған реклама
+                napay_a = wb_a - (storage*share) - (priemka*share) - (vozvrat_a*2)
                 ndv_a = napay_a * ndv_rate
                 ndvpr_a = (sebest_a * qty_a) * ndv_rate
                 ndvn_a = ndv_a - ndvpr_a
