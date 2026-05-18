@@ -486,9 +486,9 @@ def show_finance_tab(store, df):
     ndv_total = napay * ndv_rate
     ndv_prikhod = tot_seb * ndv_rate
     ndv_nashe = ndv_total - ndv_prikhod
-    do_ipn = napay - ndv_nashe - tot_seb - upakovka - logistic - samovykup - reklama_napay
+    do_ipn = napay - tot_seb
     ipn = do_ipn * 0.10 if do_ipn > 0 else 0
-    profit = do_ipn - ipn
+    profit = do_ipn - ipn - ndv_nashe - logistic - upakovka - samovykup - reklama_napay
 
     def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
     def fmtN(n): return f"{round(n):,}".replace(",", " ")
@@ -775,9 +775,11 @@ def show_finance_tab(store, df):
                 ndvpr_a = (sebest_a * qty_a) * ndv_rate
                 ndvn_a = ndv_a - ndvpr_a
                 pack_a = qty_a * 100
-                doipn_a = napay_a - ndvn_a - (sebest_a*qty_a) - pack_a - (logistic*share) - (samovykup*share) - reklama_a
+                doipn_a = napay_a - (sebest_a*qty_a)
                 ipn_a = doipn_a * 0.10 if doipn_a > 0 else 0
-                profit_a = doipn_a - ipn_a
+                pack_a = qty_a * 100
+                ndvn_a = (napay_a * (16/116)) - ((sebest_a * qty_a) * (16/116))
+                profit_a = doipn_a - ipn_a - ndvn_a - (logistic*share) - pack_a - (samovykup*share) - reklama_a
                 pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
                 prod_rows.append({
                     "Артикул": art,
