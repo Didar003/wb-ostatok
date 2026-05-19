@@ -400,9 +400,14 @@ def fetch_feedbacks(fb_key, is_answered=False, take=20):
             params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
             timeout=30
         )
-        r.raise_for_status()
-        return r.json().get("data", {}).get("feedbacks", [])
-    except:
+        if r.status_code != 200:
+            st.error(f"Feedbacks API қатесі: {r.status_code} — {r.text[:200]}")
+            return []
+        data = r.json()
+        feedbacks = data.get("data", {}).get("feedbacks", []) or []
+        return feedbacks
+    except Exception as e:
+        st.error(f"Feedbacks қатесі: {e}")
         return []
 
 def fetch_questions(fb_key, is_answered=False, take=20):
@@ -414,12 +419,13 @@ def fetch_questions(fb_key, is_answered=False, take=20):
             params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
             timeout=30
         )
-        r.raise_for_status()
+        if r.status_code != 200:
+            st.error(f"Questions API қатесі: {r.status_code} — {r.text[:200]}")
+            return []
         data = r.json()
-        if isinstance(data, dict):
-            return data.get("data", {}).get("questions", []) or data.get("questions", [])
-        return []
-    except:
+        return data.get("data", {}).get("questions", []) or data.get("questions", []) or []
+    except Exception as e:
+        st.error(f"Questions қатесі: {e}")
         return []
 
 def send_feedback_reply(fb_key, feedback_id, text):
@@ -470,9 +476,16 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback"):
         else:
             prompt = f"Товар: {product_name}\nВопрос покупателя: {review_text}\n\nНапиши ответ продавца на этот вопрос."
 
+        anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if not anthropic_key:
+            return "⚠️ ANTHROPIC_API_KEY Secrets-ке қосылмаған"
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": anthropic_key,
+                "anthropic-version": "2023-06-01"
+            },
             json={
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 300,
@@ -527,7 +540,7 @@ def show_feedback_tab(store):
                 # Авто жалоб — 1-3 жұлдыз
                 if auto_cfg["auto_complaint"]:
                     for fb in feedbacks:
-                        rating = fb.get("productValuation", 0)
+                        rating = fb.get("productValuation") or fb.get("rating") or 0
                         fb_id = fb.get("id", "")
                         if rating <= 3 and fb_id and fb_id not in complaints_data:
                             time.sleep(1.1)
@@ -540,10 +553,11 @@ def show_feedback_tab(store):
                 if auto_cfg["auto_reply"]:
                     auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
                     for fb in feedbacks:
-                        rating = fb.get("productValuation", 0)
+                        rating = fb.get("productValuation") or fb.get("rating") or 0
                         fb_id = fb.get("id", "")
                         text = fb.get("text", "")
-                        product = fb.get("productName", "")
+                        pd_ = fb.get("productDetails", {}) or {}
+                        product = pd_.get("productName", "") or fb.get("productName", "")
                         if rating >= 4 and fb_id and fb_id not in auto_replied and text:
                             time.sleep(1.1)
                             reply = ai_generate_reply(product, text, rating, "feedback")
@@ -610,9 +624,11 @@ def show_feedback_tab(store):
             st.success("✅ Жауапсыз отзыв жоқ!")
         for fb in feedbacks:
             fb_id = fb.get("id", "")
-            rating = fb.get("productValuation", 0)
+            # WB API: рейтинг productValuation немесе productDetails ішінде
+            rating = fb.get("productValuation") or fb.get("rating") or 0
+            pd_ = fb.get("productDetails", {}) or {}
             text = fb.get("text", "") or ""
-            product = fb.get("productName", "") or ""
+            product = pd_.get("productName", "") or fb.get("productName", "") or ""
             created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
 
             with st.container():
