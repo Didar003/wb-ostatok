@@ -668,9 +668,31 @@ def show_feedback_tab(store):
                 with col2:
                     if rating <= 3:
                         if fb_id in complaints:
-                            st.markdown("🚨 жалоб жіберілді")
+                            st.caption("🚨 жалоб жіберілді")
                         else:
-                            st.markdown("🔴 жауап берілмейді")
+                            st.caption("🔴 жалоб күтілуде")
+                        # 1-3 жұлдызға да ИИ жауап батырмасы
+                        if fb_id in auto_replied:
+                            reply_text = auto_replied[fb_id]
+                            if "ИИ қатесі" in reply_text or "404" in reply_text or "401" in reply_text or "Error" in reply_text:
+                                del auto_replied[fb_id]
+                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                            else:
+                                st.success("✅ жауап жіберілді")
+                                with st.expander("Жауапты көру"):
+                                    st.caption(reply_text)
+                        else:
+                            if st.button("🤖 ИИ жауап", key=f"ai_fb_low_{fb_id}"):
+                                with st.spinner("ИИ жазып жатыр..."):
+                                    time.sleep(1.1)
+                                    reply = ai_generate_reply(product, text, rating, "feedback")
+                                    ok = send_feedback_reply(fb_key, fb_id, reply)
+                                    if ok:
+                                        auto_replied[fb_id] = reply
+                                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                        st.rerun()
+                                    else:
+                                        st.error("Жіберілмеді")
                     elif fb_id in auto_replied:
                         st.success("✅ авто жауап")
                         with st.expander("Жауапты көру"):
