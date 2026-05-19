@@ -76,12 +76,14 @@ def get_stores():
         stats_key = st.secrets.get(f"STORE_{i}_STATS", "")
         analytics_key = st.secrets.get(f"STORE_{i}_ANALYTICS", "")
         finance_key = st.secrets.get(f"STORE_{i}_FINANCE", "")
+        feedback_key = st.secrets.get(f"STORE_{i}_FEEDBACK", "")
         if stats_key:
             stores.append({
                 "name": name, "idx": i,
                 "stats_key": stats_key,
                 "analytics_key": analytics_key,
                 "finance_key": finance_key,
+                "feedback_key": feedback_key,
             })
     return stores
 
@@ -382,6 +384,310 @@ def load_store_data(store):
         df = df.reset_index(drop=True)
 
     return df, sales30, errors
+
+
+# ──────────────────────────────────────────────
+# ОТЗЫВЫ & ВОПРОСЫ ФУНКЦИЯЛАРЫ
+# ──────────────────────────────────────────────
+FEEDBACK_BASE = "https://feedbacks-api.wildberries.ru"
+
+def fetch_feedbacks(fb_key, is_answered=False, take=20):
+    """Жауапсыз/жауапты отзывтар"""
+    try:
+        r = requests.get(
+            f"{FEEDBACK_BASE}/api/v1/feedbacks",
+            headers={"Authorization": fb_key},
+            params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
+            timeout=30
+        )
+        r.raise_for_status()
+        return r.json().get("data", {}).get("feedbacks", [])
+    except:
+        return []
+
+def fetch_questions(fb_key, is_answered=False, take=20):
+    """Жауапсыз/жауапты сұрақтар"""
+    try:
+        r = requests.get(
+            f"{FEEDBACK_BASE}/api/v1/questions",
+            headers={"Authorization": fb_key},
+            params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
+            timeout=30
+        )
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            return data.get("data", {}).get("questions", []) or data.get("questions", [])
+        return []
+    except:
+        return []
+
+def send_feedback_reply(fb_key, feedback_id, text):
+    """Отзывқа жауап жіберу"""
+    try:
+        r = requests.patch(
+            f"{FEEDBACK_BASE}/api/v1/feedbacks",
+            headers={"Authorization": fb_key, "Content-Type": "application/json"},
+            json={"id": feedback_id, "text": text},
+            timeout=30
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+def send_question_reply(fb_key, question_id, text):
+    """Сұраққа жауап жіберу"""
+    try:
+        r = requests.patch(
+            f"{FEEDBACK_BASE}/api/v1/questions",
+            headers={"Authorization": fb_key, "Content-Type": "application/json"},
+            json={"id": question_id, "text": text, "state": "wbRu"},
+            timeout=30
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+def send_feedback_complaint(fb_key, feedback_id):
+    """Отзывқа жалоб жіберу"""
+    try:
+        r = requests.post(
+            f"{FEEDBACK_BASE}/api/v1/feedbacks/report",
+            headers={"Authorization": fb_key, "Content-Type": "application/json"},
+            json={"id": feedback_id, "reason": "incorrect_goods_description"},
+            timeout=30
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+def ai_generate_reply(product_name, review_text, rating, reply_type="feedback"):
+    """Claude API арқылы ИИ жауап жасау"""
+    try:
+        system = "Ты — менеджер по работе с отзывами на Wildberries. Пиши краткие, вежливые ответы на русском языке. Максимум 2-3 предложения. Не используй шаблонные фразы типа 'Спасибо за ваш отзыв'."
+        if reply_type == "feedback":
+            prompt = f"Товар: {product_name}\nОценка: {rating} звёзд\nОтзыв: {review_text}\n\nНапиши ответ продавца на этот отзыв."
+        else:
+            prompt = f"Товар: {product_name}\nВопрос покупателя: {review_text}\n\nНапиши ответ продавца на этот вопрос."
+
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 300,
+                "system": system,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=30
+        )
+        r.raise_for_status()
+        return r.json()["content"][0]["text"].strip()
+    except Exception as e:
+        return f"ИИ қатесі: {e}"
+
+def render_stars(rating):
+    filled = "★" * rating
+    empty = "☆" * (5 - rating)
+    color = "#E24B4A" if rating <= 3 else "#F0C040"
+    return f'<span style="color:{color};font-size:15px;">{filled}{empty}</span>'
+
+def show_feedback_tab(store):
+    idx = store["idx"]
+    fb_key = store.get("feedback_key", "")
+
+    if not fb_key:
+        st.warning("⚠️ Secrets-ке STORE_{n}_FEEDBACK токенін қосыңыз")
+        return
+
+    # Авто баптаулар
+    auto_key = f"fb_auto_{idx}"
+    if auto_key not in st.session_state:
+        st.session_state[auto_key] = {"auto_reply": True, "auto_complaint": True}
+    auto_cfg = st.session_state[auto_key]
+
+    # Деректерді жүктеу
+    load_key = f"fb_data_{idx}"
+    if load_key not in st.session_state:
+        st.session_state[load_key] = None
+
+    col_load, col_auto1, col_auto2 = st.columns([2, 1.5, 1.5])
+    with col_load:
+        if st.button("🔄 Жүктеу", key=f"fb_load_{idx}", use_container_width=True):
+            with st.spinner("Жүктелуде..."):
+                feedbacks = fetch_feedbacks(fb_key, is_answered=False, take=30)
+                questions = fetch_questions(fb_key, is_answered=False, take=30)
+                complaints_data = load_json(f"/tmp/wb_complaints_{idx}.json")
+                st.session_state[load_key] = {
+                    "feedbacks": feedbacks,
+                    "questions": questions,
+                    "complaints": complaints_data
+                }
+
+                # Авто жалоб — 1-3 жұлдыз
+                if auto_cfg["auto_complaint"]:
+                    for fb in feedbacks:
+                        rating = fb.get("productValuation", 0)
+                        fb_id = fb.get("id", "")
+                        if rating <= 3 and fb_id and fb_id not in complaints_data:
+                            time.sleep(1.1)
+                            ok = send_feedback_complaint(fb_key, fb_id)
+                            if ok:
+                                complaints_data[fb_id] = "sent"
+                                save_json(f"/tmp/wb_complaints_{idx}.json", complaints_data)
+
+                # Авто жауап — 4-5 жұлдыз
+                if auto_cfg["auto_reply"]:
+                    auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
+                    for fb in feedbacks:
+                        rating = fb.get("productValuation", 0)
+                        fb_id = fb.get("id", "")
+                        text = fb.get("text", "")
+                        product = fb.get("productName", "")
+                        if rating >= 4 and fb_id and fb_id not in auto_replied and text:
+                            time.sleep(1.1)
+                            reply = ai_generate_reply(product, text, rating, "feedback")
+                            ok = send_feedback_reply(fb_key, fb_id, reply)
+                            if ok:
+                                auto_replied[fb_id] = reply
+                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                    # Сұрақтарға авто жауап
+                    for q in questions:
+                        q_id = q.get("id", "")
+                        q_text = q.get("text", "")
+                        product = q.get("productName", "")
+                        if q_id and q_id not in auto_replied and q_text:
+                            time.sleep(1.1)
+                            reply = ai_generate_reply(product, q_text, 5, "question")
+                            ok = send_question_reply(fb_key, q_id, reply)
+                            if ok:
+                                auto_replied[q_id] = reply
+                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+
+                st.rerun()
+
+    with col_auto1:
+        new_val1 = st.toggle("Авто жауап (4-5★)", value=auto_cfg["auto_reply"], key=f"toggle_reply_{idx}")
+        if new_val1 != auto_cfg["auto_reply"]:
+            st.session_state[auto_key]["auto_reply"] = new_val1
+
+    with col_auto2:
+        new_val2 = st.toggle("Авто жалоб (1-3★)", value=auto_cfg["auto_complaint"], key=f"toggle_comp_{idx}")
+        if new_val2 != auto_cfg["auto_complaint"]:
+            st.session_state[auto_key]["auto_complaint"] = new_val2
+
+    data = st.session_state[load_key]
+    if data is None:
+        st.info("👆 **«Жүктеу»** батырмасын басыңыз")
+        return
+
+    feedbacks = data.get("feedbacks", [])
+    questions = data.get("questions", [])
+    complaints = data.get("complaints", {})
+    auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
+
+    # Метрикалар
+    low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("⭐ Жаңа отзыв", len(feedbacks))
+    c2.metric("❓ Жаңа сұрақ", len(questions))
+    c3.metric("🤖 Авто жауап", len(auto_replied))
+    c4.metric("✅ Жалоб жіберілді", len(complaints))
+    c5.metric("🔴 1-3 жұлдыз", len(low_star))
+
+    st.divider()
+
+    # ── 3 ТАБ ──
+    t1, t2, t3 = st.tabs([
+        f"⭐ Отзывы ({len(feedbacks)})",
+        f"❓ Вопросы ({len(questions)})",
+        f"🚨 Жалобы ({len(complaints)})"
+    ])
+
+    # ОТЗЫВЫ
+    with t1:
+        if not feedbacks:
+            st.success("✅ Жауапсыз отзыв жоқ!")
+        for fb in feedbacks:
+            fb_id = fb.get("id", "")
+            rating = fb.get("productValuation", 0)
+            text = fb.get("text", "") or ""
+            product = fb.get("productName", "") or ""
+            created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
+
+            with st.container():
+                col1, col2 = st.columns([6, 2])
+                with col1:
+                    st.markdown(render_stars(rating) + f' &nbsp; <span style="font-size:12px;color:gray;">{product} · {created}</span>', unsafe_allow_html=True)
+                    if text:
+                        st.caption(f'"{text[:200]}{"..." if len(text)>200 else ""}"')
+
+                with col2:
+                    if rating <= 3:
+                        if fb_id in complaints:
+                            st.markdown("🚨 жалоб жіберілді")
+                        else:
+                            st.markdown("🔴 жауап берілмейді")
+                    elif fb_id in auto_replied:
+                        st.success("✅ авто жауап")
+                        with st.expander("Жауапты көру"):
+                            st.caption(auto_replied[fb_id])
+                    else:
+                        if st.button("🤖 ИИ жауап", key=f"ai_fb_{fb_id}"):
+                            with st.spinner("ИИ жазып жатыр..."):
+                                time.sleep(1.1)
+                                reply = ai_generate_reply(product, text, rating, "feedback")
+                                ok = send_feedback_reply(fb_key, fb_id, reply)
+                                if ok:
+                                    auto_replied[fb_id] = reply
+                                    save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    st.rerun()
+                                else:
+                                    st.error("Жіберілмеді")
+                st.divider()
+
+    # ВОПРОСЫ
+    with t2:
+        if not questions:
+            st.success("✅ Жауапсыз сұрақ жоқ!")
+        for q in questions:
+            q_id = q.get("id", "")
+            q_text = q.get("text", "") or ""
+            product = q.get("productName", "") or ""
+            created = q.get("createdDate", "")[:10] if q.get("createdDate") else ""
+
+            with st.container():
+                col1, col2 = st.columns([6, 2])
+                with col1:
+                    st.markdown(f'❓ <span style="font-size:12px;color:gray;">{product} · {created}</span>', unsafe_allow_html=True)
+                    if q_text:
+                        st.caption(f'"{q_text[:200]}{"..." if len(q_text)>200 else ""}"')
+                with col2:
+                    if q_id in auto_replied:
+                        st.success("✅ авто жауап")
+                        with st.expander("Жауапты көру"):
+                            st.caption(auto_replied[q_id])
+                    else:
+                        if st.button("🤖 ИИ жауап", key=f"ai_q_{q_id}"):
+                            with st.spinner("ИИ жазып жатыр..."):
+                                time.sleep(1.1)
+                                reply = ai_generate_reply(product, q_text, 5, "question")
+                                ok = send_question_reply(fb_key, q_id, reply)
+                                if ok:
+                                    auto_replied[q_id] = reply
+                                    save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    st.rerun()
+                                else:
+                                    st.error("Жіберілмеді")
+                st.divider()
+
+    # ЖАЛОБЫ
+    with t3:
+        if not complaints:
+            st.info("Жалоб жоқ")
+        else:
+            for fb_id, status in complaints.items():
+                st.markdown(f"🚨 ID: `{fb_id[:8]}...` — **{status}**")
 
 # ──────────────────────────────────────────────
 # ФИНАНСЫ ТАБИ
@@ -876,8 +1182,8 @@ def show_store(store, df, sales30, filter_status, search):
         st.warning("Деректер жоқ немесе жүктелмеді")
         return
 
-    tab_ostatok, tab_analytic, tab_finance = st.tabs([
-        "📦 Остатки", "📊 Аналитика — 30 күн", "💰 Финансы"
+    tab_ostatok, tab_analytic, tab_finance, tab_feedback = st.tabs([
+        "📦 Остатки", "📊 Аналитика — 30 күн", "💰 Финансы", "💬 Отзывы & Вопросы"
     ])
 
     # ── АНАЛИТИКА ──
@@ -909,6 +1215,10 @@ def show_store(store, df, sales30, filter_status, search):
     # ── ФИНАНСЫ ──
     with tab_finance:
         show_finance_tab(store, df)
+
+    # ── ОТЗЫВЫ & ВОПРОСЫ ──
+    with tab_feedback:
+        show_feedback_tab(store)
 
     # ── ОСТАТКИ ──
     with tab_ostatok:
