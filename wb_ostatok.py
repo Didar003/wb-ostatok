@@ -437,8 +437,11 @@ def send_feedback_reply(fb_key, feedback_id, text):
             json={"id": feedback_id, "text": text},
             timeout=30
         )
+        if r.status_code != 200:
+            st.error(f"WB жауап қатесі {r.status_code}: {r.text[:300]}")
         return r.status_code == 200
-    except:
+    except Exception as e:
+        st.error(f"send_feedback_reply қатесі: {e}")
         return False
 
 def send_question_reply(fb_key, question_id, text):
