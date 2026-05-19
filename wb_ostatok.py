@@ -473,7 +473,7 @@ def send_feedback_complaint(fb_key, feedback_id):
     except:
         return False
 
-def ai_generate_reply(product_name, review_text, rating, reply_type="feedback"):
+def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons=""):
     """Claude API арқылы ИИ жауап жасау"""
     try:
         if reply_type == "feedback":
@@ -489,7 +489,15 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback"):
                 "- Если смешанный — отреагируй на минус и похвали плюс\n"
                 "- Пиши только на русском языке"
             )
-            prompt = "Товар: " + product_name + "\nОценка: " + str(rating) + " из 5\nОтзыв покупателя: " + review_text + "\n\nНапиши ответ продавца:"
+            parts = ["Товар: " + product_name, "Оценка: " + str(rating) + " из 5"]
+            if pros:
+                parts.append("Плюсы: " + pros)
+            if cons:
+                parts.append("Минусы: " + cons)
+            if review_text:
+                parts.append("Комментарий: " + review_text)
+            parts.append("\nНапиши ответ продавца:")
+            prompt = "\n".join(parts)
         else:
             system = (
                 "Ты — компетентный менеджер магазина косметики на Wildberries.\n"
@@ -583,11 +591,13 @@ def show_feedback_tab(store):
                         rating = fb.get("productValuation") or fb.get("rating") or 0
                         fb_id = fb.get("id", "")
                         text = fb.get("text", "")
+                        pros_a = fb.get("pros", "") or ""
+                        cons_a = fb.get("cons", "") or ""
                         pd_ = fb.get("productDetails", {}) or {}
                         product = pd_.get("productName", "") or fb.get("productName", "")
                         if rating >= 4 and fb_id and fb_id not in auto_replied and text:
                             time.sleep(1.1)
-                            reply = ai_generate_reply(product, text, rating, "feedback")
+                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a)
                             ok = send_feedback_reply(fb_key, fb_id, reply)
                             if ok:
                                 auto_replied[fb_id] = reply
@@ -651,10 +661,11 @@ def show_feedback_tab(store):
             st.success("✅ Жауапсыз отзыв жоқ!")
         for fb in feedbacks:
             fb_id = fb.get("id", "")
-            # WB API: рейтинг productValuation немесе productDetails ішінде
             rating = fb.get("productValuation") or fb.get("rating") or 0
             pd_ = fb.get("productDetails", {}) or {}
             text = fb.get("text", "") or ""
+            pros = fb.get("pros", "") or ""
+            cons = fb.get("cons", "") or ""
             product = pd_.get("productName", "") or fb.get("productName", "") or ""
             created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
 
@@ -685,7 +696,7 @@ def show_feedback_tab(store):
                             if st.button("🤖 ИИ жауап", key=f"ai_fb_low_{fb_id}"):
                                 with st.spinner("ИИ жазып жатыр..."):
                                     time.sleep(1.1)
-                                    reply = ai_generate_reply(product, text, rating, "feedback")
+                                    reply = ai_generate_reply(product, text, rating, "feedback", pros, cons)
                                     ok = send_feedback_reply(fb_key, fb_id, reply)
                                     if ok:
                                         auto_replied[fb_id] = reply
@@ -701,7 +712,7 @@ def show_feedback_tab(store):
                         if st.button("🤖 ИИ жауап", key=f"ai_fb_{fb_id}"):
                             with st.spinner("ИИ жазып жатыр..."):
                                 time.sleep(1.1)
-                                reply = ai_generate_reply(product, text, rating, "feedback")
+                                reply = ai_generate_reply(product, text, rating, "feedback", pros, cons)
                                 ok = send_feedback_reply(fb_key, fb_id, reply)
                                 if ok:
                                     auto_replied[fb_id] = reply
