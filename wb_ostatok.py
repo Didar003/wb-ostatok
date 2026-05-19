@@ -473,7 +473,7 @@ def send_feedback_complaint(fb_key, feedback_id):
     except:
         return False
 
-def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons=""):
+def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables=""):
     """Claude API арқылы ИИ жауап жасау"""
     try:
         if reply_type == "feedback":
@@ -494,6 +494,8 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
                 parts.append("Плюсы: " + pros)
             if cons:
                 parts.append("Минусы: " + cons)
+            if bables:
+                parts.append("Жалобы покупателя: " + bables)
             if review_text:
                 parts.append("Комментарий: " + review_text)
             parts.append("\nНапиши ответ продавца:")
@@ -595,9 +597,10 @@ def show_feedback_tab(store):
                         cons_a = fb.get("cons", "") or ""
                         pd_ = fb.get("productDetails", {}) or {}
                         product = pd_.get("productName", "") or fb.get("productName", "")
+                        bables_a = ", ".join(fb.get("bables", []) or [])
                         if rating >= 4 and fb_id and fb_id not in auto_replied and text:
                             time.sleep(1.1)
-                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a)
+                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a, bables_a)
                             ok = send_feedback_reply(fb_key, fb_id, reply)
                             if ok:
                                 auto_replied[fb_id] = reply
@@ -651,14 +654,13 @@ def show_feedback_tab(store):
     with t1:
         if not feedbacks:
             st.success("✅ Жауапсыз отзыв жоқ!")
-        if feedbacks:
-            with st.expander("🔍 Debug — бірінші отзыв"):
-                st.json({k: v for k, v in feedbacks[0].items() if v is not None and v != "" and v != 0})
         for fb in feedbacks:
             fb_id = fb.get("id", "")
             rating = fb.get("productValuation") or fb.get("rating") or 0
             pd_ = fb.get("productDetails", {}) or {}
             text = fb.get("text", "") or ""
+            bables = fb.get("bables", []) or []
+            bables_text = ", ".join(bables) if bables else ""
             pros = fb.get("pros", "") or ""
             cons = fb.get("cons", "") or ""
             product = pd_.get("productName", "") or fb.get("productName", "") or ""
@@ -691,7 +693,7 @@ def show_feedback_tab(store):
                             if st.button("🤖 ИИ жауап", key=f"ai_fb_low_{fb_id}"):
                                 with st.spinner("ИИ жазып жатыр..."):
                                     time.sleep(1.1)
-                                    reply = ai_generate_reply(product, text, rating, "feedback", pros, cons)
+                                    reply = ai_generate_reply(product, text, rating, "feedback", pros, cons, bables_text)
                                     ok = send_feedback_reply(fb_key, fb_id, reply)
                                     if ok:
                                         auto_replied[fb_id] = reply
@@ -721,9 +723,6 @@ def show_feedback_tab(store):
     with t2:
         if not questions:
             st.success("✅ Жауапсыз сұрақ жоқ!")
-        if questions:
-            with st.expander("🔍 Debug — бірінші сұрақ"):
-                st.json({k: v for k, v in questions[0].items() if v is not None and v != "" and v != 0})
         for q in questions:
             q_id = q.get("id", "")
             q_text = q.get("text", "") or ""
