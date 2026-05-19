@@ -400,7 +400,7 @@ def fetch_feedbacks(fb_key, is_answered=False, take=20):
             params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
             timeout=30
         )
-        if r.status_code != 200:
+        if r.status_code not in (200, 201, 204):
             st.error(f"Feedbacks API қатесі: {r.status_code} — {r.text[:200]}")
             return []
         data = r.json()
@@ -419,7 +419,7 @@ def fetch_questions(fb_key, is_answered=False, take=20):
             params={"isAnswered": str(is_answered).lower(), "take": take, "skip": 0, "order": "dateDesc"},
             timeout=30
         )
-        if r.status_code != 200:
+        if r.status_code not in (200, 201, 204):
             st.error(f"Questions API қатесі: {r.status_code} — {r.text[:200]}")
             return []
         data = r.json()
@@ -437,9 +437,9 @@ def send_feedback_reply(fb_key, feedback_id, text):
             json={"id": feedback_id, "text": text},
             timeout=30
         )
-        if r.status_code != 200:
+        if r.status_code not in (200, 201, 204):
             st.error(f"WB жауап қатесі {r.status_code}: {r.text[:300]}")
-        return r.status_code == 200
+        return r.status_code in (200, 201, 204)
     except Exception as e:
         st.error(f"send_feedback_reply қатесі: {e}")
         return False
@@ -453,9 +453,9 @@ def send_question_reply(fb_key, question_id, text):
             json={"id": question_id, "answer": {"text": text}, "state": "wbRu"},
             timeout=30
         )
-        if r.status_code != 200:
+        if r.status_code not in (200, 201, 204):
             st.error(f"WB сұрақ қатесі {r.status_code}: {r.text[:300]}")
-        return r.status_code == 200
+        return r.status_code in (200, 201, 204)
     except Exception as e:
         st.error(f"send_question_reply қатесі: {e}")
         return False
@@ -469,7 +469,7 @@ def send_feedback_complaint(fb_key, feedback_id):
             json={"id": feedback_id, "reason": "incorrect_goods_description"},
             timeout=30
         )
-        return r.status_code == 200
+        return r.status_code in (200, 201, 204)
     except:
         return False
 
@@ -1395,3 +1395,4 @@ for tab, store in zip(tabs, visible_stores):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
+            
