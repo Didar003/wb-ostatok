@@ -493,7 +493,7 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback"):
                 "anthropic-version": "2023-06-01"
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5",
                 "max_tokens": 300,
                 "system": system,
                 "messages": [{"role": "user", "content": prompt}]
@@ -1395,4 +1395,3 @@ for tab, store in zip(tabs, visible_stores):
         else:
             sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
             show_store(store, st.session_state[df_key], sales30, filter_status, search)
-            
