@@ -432,7 +432,7 @@ def send_feedback_reply(fb_key, feedback_id, text):
     """Отзывқа жауап жіберу"""
     try:
         r = requests.patch(
-            f"{FEEDBACK_BASE}/api/v1/feedbacks",
+            f"{FEEDBACK_BASE}/api/v1/feedbacks/answer",
             headers={"Authorization": fb_key, "Content-Type": "application/json"},
             json={"id": feedback_id, "text": text},
             timeout=30
@@ -450,11 +450,14 @@ def send_question_reply(fb_key, question_id, text):
         r = requests.patch(
             f"{FEEDBACK_BASE}/api/v1/questions",
             headers={"Authorization": fb_key, "Content-Type": "application/json"},
-            json={"id": question_id, "text": text, "state": "wbRu"},
+            json={"id": question_id, "answer": {"text": text}, "state": "wbRu"},
             timeout=30
         )
+        if r.status_code != 200:
+            st.error(f"WB сұрақ қатесі {r.status_code}: {r.text[:300]}")
         return r.status_code == 200
-    except:
+    except Exception as e:
+        st.error(f"send_question_reply қатесі: {e}")
         return False
 
 def send_feedback_complaint(fb_key, feedback_id):
