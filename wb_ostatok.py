@@ -721,8 +721,10 @@ def show_feedback_tab(store):
         for q in questions:
             q_id = q.get("id", "")
             q_text = q.get("text", "") or ""
-            product = q.get("productName", "") or ""
+            pd_q = q.get("productDetails", {}) or {}
+            product = pd_q.get("productName", "") or q.get("productName", "") or ""
             created = q.get("createdDate", "")[:10] if q.get("createdDate") else ""
+            preview_key_q = f"preview_q_{q_id}"
 
             with st.container():
                 col1, col2 = st.columns([6, 2])
@@ -731,28 +733,50 @@ def show_feedback_tab(store):
                     if q_text:
                         st.caption(f'"{q_text[:200]}{"..." if len(q_text)>200 else ""}"')
                 with col2:
-                    if q_id in auto_replied:
-                        reply_text = auto_replied[q_id]
-                        if "ИИ қатесі" in reply_text or "404" in reply_text or "401" in reply_text or "Error" in reply_text:
-                            del auto_replied[q_id]
-                            save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-                            st.warning("⚠️ Ескі қате жауап тазаланды — қайта жіберіңіз")
-                        else:
-                            st.success("✅ авто жауап")
-                            with st.expander("Жауапты көру"):
-                                st.caption(reply_text)
+                    pass
+
+                # Жіберілген жауап
+                if q_id in auto_replied:
+                    reply_text = auto_replied[q_id]
+                    if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text:
+                        del auto_replied[q_id]
+                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                        st.warning("⚠️ Қате жауап тазаланды")
                     else:
-                        if st.button("🤖 ИИ жауап", key=f"ai_q_{q_id}"):
-                            with st.spinner("ИИ жазып жатыр..."):
+                        st.success("✅ Опубликован")
+                        with st.expander("Жауапты көру"):
+                            st.caption(reply_text)
+
+                # Preview режимі
+                elif preview_key_q in st.session_state:
+                    preview_text = st.session_state[preview_key_q]
+                    edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_q_{q_id}", height=100)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("📤 Опубликовать", key=f"pub_q_{q_id}", use_container_width=True):
+                            with st.spinner("Жіберілуде..."):
                                 time.sleep(1.1)
-                                reply = ai_generate_reply(product, q_text, 5, "question")
-                                ok = send_question_reply(fb_key, q_id, reply)
+                                ok = send_question_reply(fb_key, q_id, edited)
                                 if ok:
-                                    auto_replied[q_id] = reply
+                                    auto_replied[q_id] = edited
                                     save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    del st.session_state[preview_key_q]
                                     st.rerun()
                                 else:
                                     st.error("Жіберілмеді")
+                    with c2:
+                        if st.button("🗑 Жою", key=f"del_q_{q_id}", use_container_width=True):
+                            del st.session_state[preview_key_q]
+                            st.rerun()
+
+                # ИИ жауап батырмасы
+                else:
+                    if st.button("🤖 ИИ жауап жасау", key=f"ai_q_{q_id}", use_container_width=True):
+                        with st.spinner("ИИ жазып жатыр..."):
+                            reply = ai_generate_reply(product, q_text, 5, "question")
+                            st.session_state[preview_key_q] = reply
+                            st.rerun()
+
                 st.divider()
 
     # ЖАЛОБЫ
