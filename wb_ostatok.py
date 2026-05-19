@@ -686,9 +686,15 @@ def show_feedback_tab(store):
                         st.caption(f'"{q_text[:200]}{"..." if len(q_text)>200 else ""}"')
                 with col2:
                     if q_id in auto_replied:
-                        st.success("✅ авто жауап")
-                        with st.expander("Жауапты көру"):
-                            st.caption(auto_replied[q_id])
+                        reply_text = auto_replied[q_id]
+                        if "ИИ қатесі" in reply_text or "404" in reply_text or "401" in reply_text or "Error" in reply_text:
+                            del auto_replied[q_id]
+                            save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                            st.warning("⚠️ Ескі қате жауап тазаланды — қайта жіберіңіз")
+                        else:
+                            st.success("✅ авто жауап")
+                            with st.expander("Жауапты көру"):
+                                st.caption(reply_text)
                     else:
                         if st.button("🤖 ИИ жауап", key=f"ai_q_{q_id}"):
                             with st.spinner("ИИ жазып жатыр..."):
