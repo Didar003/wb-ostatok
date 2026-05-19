@@ -473,10 +473,11 @@ def send_feedback_complaint(fb_key, feedback_id):
     except:
         return False
 
-def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables=""):
+def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables="", order_status=""):
     """Claude API арқылы ИИ жауап жасау"""
     try:
         if reply_type == "feedback":
+            is_rejected = order_status in ("rejected", "cancelled", "canceled")
             system = (
                 "Ты — вежливый менеджер магазина косметики на Wildberries.\n"
                 "Правила:\n"
@@ -484,12 +485,15 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
                 "- 2-3 предложения максимум\n"
                 "- Не копируй текст отзыва обратно\n"
                 "- Не используй: Спасибо за отзыв, Мы рады, Будем рады видеть вас снова\n"
-                "- Если отзыв положительный — коротко подтверди и порекомендуй другие товары\n"
-                "- Если негативный — извинись, предложи решение (замену, возврат, связаться с поддержкой)\n"
-                "- Если смешанный — отреагируй на минус и похвали плюс\n"
-                "- Пиши только на русском языке"
+                + ("- Покупатель ОТКАЗАЛСЯ от товара или сделал ВОЗВРАТ. Не предлагай замену или другой заказ. Извинись и предложи обратиться в поддержку WB.\n" if is_rejected else
+                   "- Если отзыв положительный — коротко подтверди и порекомендуй другие товары\n"
+                   "- Если негативный — извинись, предложи решение (замену, возврат, связаться с поддержкой)\n"
+                   "- Если смешанный — отреагируй на минус и похвали плюс\n")
+                + "- Пиши только на русском языке"
             )
             parts = ["Товар: " + product_name, "Оценка: " + str(rating) + " из 5"]
+            if order_status in ("rejected", "cancelled", "canceled"):
+                parts.append("Статус заказа: ОТКАЗ/ВОЗВРАТ")
             if pros:
                 parts.append("Плюсы: " + pros)
             if cons:
@@ -600,7 +604,7 @@ def show_feedback_tab(store):
                         bables_a = ", ".join(fb.get("bables", []) or [])
                         if rating >= 4 and fb_id and fb_id not in auto_replied and text:
                             time.sleep(1.1)
-                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a, bables_a)
+                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a, bables_a, fb.get("orderStatus", ""))
                             ok = send_feedback_reply(fb_key, fb_id, reply)
                             if ok:
                                 auto_replied[fb_id] = reply
@@ -663,60 +667,69 @@ def show_feedback_tab(store):
             bables_text = ", ".join(bables) if bables else ""
             pros = fb.get("pros", "") or ""
             cons = fb.get("cons", "") or ""
+            order_status = fb.get("orderStatus", "") or ""
             product = pd_.get("productName", "") or fb.get("productName", "") or ""
             created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
+
+            preview_key_fb = f"preview_fb_{fb_id}"
 
             with st.container():
                 col1, col2 = st.columns([6, 2])
                 with col1:
                     st.markdown(render_stars(rating) + f' &nbsp; <span style="font-size:12px;color:gray;">{product} · {created}</span>', unsafe_allow_html=True)
+                    if bables_text:
+                        st.caption(f"⚠️ {bables_text}")
                     if text:
                         st.caption(f'"{text[:200]}{"..." if len(text)>200 else ""}"')
-
                 with col2:
                     if rating <= 3:
                         if fb_id in complaints:
                             st.caption("🚨 жалоб жіберілді")
                         else:
                             st.caption("🔴 жалоб күтілуде")
-                        # 1-3 жұлдызға да ИИ жауап батырмасы
-                        if fb_id in auto_replied:
-                            reply_text = auto_replied[fb_id]
-                            if "ИИ қатесі" in reply_text or "404" in reply_text or "401" in reply_text or "Error" in reply_text:
-                                del auto_replied[fb_id]
-                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-                            else:
-                                st.success("✅ жауап жіберілді")
-                                with st.expander("Жауапты көру"):
-                                    st.caption(reply_text)
-                        else:
-                            if st.button("🤖 ИИ жауап", key=f"ai_fb_low_{fb_id}"):
-                                with st.spinner("ИИ жазып жатыр..."):
-                                    time.sleep(1.1)
-                                    reply = ai_generate_reply(product, text, rating, "feedback", pros, cons, bables_text)
-                                    ok = send_feedback_reply(fb_key, fb_id, reply)
-                                    if ok:
-                                        auto_replied[fb_id] = reply
-                                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-                                        st.rerun()
-                                    else:
-                                        st.error("Жіберілмеді")
-                    elif fb_id in auto_replied:
-                        st.success("✅ авто жауап")
-                        with st.expander("Жауапты көру"):
-                            st.caption(auto_replied[fb_id])
+
+                # Жіберілген жауап
+                if fb_id in auto_replied:
+                    reply_text = auto_replied[fb_id]
+                    if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
+                        del auto_replied[fb_id]
+                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                        st.warning("⚠️ Қате жауап тазаланды")
                     else:
-                        if st.button("🤖 ИИ жауап", key=f"ai_fb_{fb_id}"):
-                            with st.spinner("ИИ жазып жатыр..."):
+                        st.success("✅ Опубликован")
+                        with st.expander("Жауапты көру"):
+                            st.caption(reply_text)
+
+                # Preview режимі
+                elif preview_key_fb in st.session_state:
+                    preview_text = st.session_state[preview_key_fb]
+                    edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("📤 Опубликовать", key=f"pub_fb_{fb_id}", use_container_width=True):
+                            with st.spinner("Жіберілуде..."):
                                 time.sleep(1.1)
-                                reply = ai_generate_reply(product, text, rating, "feedback", pros, cons)
-                                ok = send_feedback_reply(fb_key, fb_id, reply)
+                                ok = send_feedback_reply(fb_key, fb_id, edited)
                                 if ok:
-                                    auto_replied[fb_id] = reply
+                                    auto_replied[fb_id] = edited
                                     save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    del st.session_state[preview_key_fb]
                                     st.rerun()
                                 else:
                                     st.error("Жіберілмеді")
+                    with c2:
+                        if st.button("🗑 Жою", key=f"del_fb_{fb_id}", use_container_width=True):
+                            del st.session_state[preview_key_fb]
+                            st.rerun()
+
+                # ИИ жауап батырмасы
+                else:
+                    if st.button("🤖 ИИ жауап жасау", key=f"ai_fb_{fb_id}", use_container_width=True):
+                        with st.spinner("ИИ жазып жатыр..."):
+                            reply = ai_generate_reply(product, text, rating, "feedback", pros, cons, bables_text, order_status)
+                            st.session_state[preview_key_fb] = reply
+                            st.rerun()
+
                 st.divider()
 
     # ВОПРОСЫ
