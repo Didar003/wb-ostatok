@@ -602,18 +602,7 @@ def show_feedback_tab(store):
                             if ok:
                                 auto_replied[fb_id] = reply
                                 save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-                    # Сұрақтарға авто жауап
-                    for q in questions:
-                        q_id = q.get("id", "")
-                        q_text = q.get("text", "")
-                        product = q.get("productName", "")
-                        if q_id and q_id not in auto_replied and q_text:
-                            time.sleep(1.1)
-                            reply = ai_generate_reply(product, q_text, 5, "question")
-                            ok = send_question_reply(fb_key, q_id, reply)
-                            if ok:
-                                auto_replied[q_id] = reply
-                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                    # Сұрақтарға авто жауап жоқ — тек қолмен
 
                 st.rerun()
 
@@ -626,6 +615,9 @@ def show_feedback_tab(store):
         new_val2 = st.toggle("Авто жалоб (1-3★)", value=auto_cfg["auto_complaint"], key=f"toggle_comp_{idx}")
         if new_val2 != auto_cfg["auto_complaint"]:
             st.session_state[auto_key]["auto_complaint"] = new_val2
+
+    # Метрикалар қатарына "Авто вопросы" ескертуі
+
 
     data = st.session_state[load_key]
     if data is None:
@@ -641,7 +633,7 @@ def show_feedback_tab(store):
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("⭐ Жаңа отзыв", len(feedbacks))
-    c2.metric("❓ Жаңа сұрақ", len(questions))
+    c2.metric("❓ Авто вопросы", len(questions), help="Сұрақтарға қолмен жауап береді")
     c3.metric("🤖 Авто жауап", len(auto_replied))
     c4.metric("✅ Жалоб жіберілді", len(complaints))
     c5.metric("🔴 1-3 жұлдыз", len(low_star))
@@ -651,7 +643,7 @@ def show_feedback_tab(store):
     # ── 3 ТАБ ──
     t1, t2, t3 = st.tabs([
         f"⭐ Отзывы ({len(feedbacks)})",
-        f"❓ Вопросы ({len(questions)})",
+        f"❓ Авто вопросы ({len(questions)})",
         f"🚨 Жалобы ({len(complaints)})"
     ])
 
