@@ -651,6 +651,9 @@ def show_feedback_tab(store):
     with t1:
         if not feedbacks:
             st.success("✅ Жауапсыз отзыв жоқ!")
+        if feedbacks:
+            with st.expander("🔍 Debug — бірінші отзыв"):
+                st.json({k: v for k, v in feedbacks[0].items() if v is not None and v != "" and v != 0})
         for fb in feedbacks:
             fb_id = fb.get("id", "")
             rating = fb.get("productValuation") or fb.get("rating") or 0
@@ -718,6 +721,9 @@ def show_feedback_tab(store):
     with t2:
         if not questions:
             st.success("✅ Жауапсыз сұрақ жоқ!")
+        if questions:
+            with st.expander("🔍 Debug — бірінші сұрақ"):
+                st.json({k: v for k, v in questions[0].items() if v is not None and v != "" and v != 0})
         for q in questions:
             q_id = q.get("id", "")
             q_text = q.get("text", "") or ""
