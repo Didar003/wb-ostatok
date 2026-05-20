@@ -81,39 +81,56 @@ def github_save(filename, data):
         return False
 
 def load_json(path):
-    """Алдымен GitHub-тан, болмаса локалдан оқу"""
+    """Оқу: алдымен сессия кэші → локал файл → GitHub"""
     filename = os.path.basename(path)
-    # GitHub-тан оқу (тек маңызды файлдар)
-    if filename in ("sebest_data.json", "fbo_data.json"):
-        gh_data = github_load(filename)
-        if gh_data is not None:
-            # Локалға да жаз (кэш ретінде)
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(gh_data, f, ensure_ascii=False, indent=2)
-            except:
-                pass
-            return gh_data
-    # Локалдан оқу
+    cache_key = f"_json_cache_{filename}"
+
+    # Сессия кэшінен оқу (ең жылдам)
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+
+    # Локал файлдан оқу
+    data = None
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
     except:
         pass
-    return {}
+
+    # Локал жоқ болса — GitHub-тан оқу
+    if data is None and filename in ("sebest_data.json", "fbo_data.json"):
+        gh_data = github_load(filename)
+        if gh_data is not None:
+            data = gh_data
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except:
+                pass
+
+    if data is None:
+        data = {}
+
+    # Кэшке сақтау
+    st.session_state[cache_key] = data
+    return data
 
 def save_json(path, data):
-    """Локалға + GitHub-қа сақтау"""
+    """Локалға + кэшке + GitHub-қа сақтау"""
+    filename = os.path.basename(path)
+    # Кэшті жаңарту
+    cache_key = f"_json_cache_{filename}"
+    st.session_state[cache_key] = data
+    # Локалға жазу
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Не сохранено локально: {e}")
-    # GitHub-қа автосақтау (тек маңызды файлдар)
-    filename = os.path.basename(path)
+    # GitHub-қа автосақтау
     if filename in ("sebest_data.json", "fbo_data.json"):
         github_save(filename, data)
 
