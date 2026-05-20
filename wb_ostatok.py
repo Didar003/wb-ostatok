@@ -1333,40 +1333,61 @@ with st.sidebar:
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
 
-        # Дүкен ұяшықтары
+        # Дүкен карточкалары — тек батырма, CSS арқылы стильдеу
         for _i, _s in enumerate(visible_stores):
             _key = f"store_{_i}"
             _active = (_cur_view == _key) and not _mg_on
             _has_data = f"df_{_s['idx']}" in st.session_state
-            _dot = "🟢" if _has_data else "⚪"
-            _bg = "#185FA5" if _active else "#EEF2FA"
-            _fg = "white" if _active else "#1a1a2e"
-            _fw = "700" if _active else "500"
-            st.markdown(
-                f"<div style='background:{_bg};color:{_fg};padding:8px 12px;"
-                f"border-radius:8px;margin-bottom:4px;font-weight:{_fw};font-size:13px;'>"
-                f"{_dot} {_s['name']}</div>",
-                unsafe_allow_html=True
-            )
-            if st.button(_s["name"], key=f"nav_{_i}", use_container_width=True):
+
+            _border = "3px solid #185FA5" if _active else "1px solid #dde3ef"
+            _bg     = "#EBF2FF" if _active else "white"
+            _fw     = "700" if _active else "500"
+
+            st.markdown(f"""
+            <style>
+            div[data-testid="stButton"]:has(button[key="nav_{_i}"]) button {{
+                background:{_bg} !important;
+                border:{_border} !important;
+                border-radius:10px !important;
+                padding:10px 14px !important;
+                text-align:left !important;
+                height:auto !important;
+                white-space:pre-wrap !important;
+                color:#1a1a2e !important;
+                font-weight:{_fw} !important;
+                box-shadow:none !important;
+            }}
+            </style>""", unsafe_allow_html=True)
+
+            _btn_label = _s['name']
+            if st.button(_btn_label, key=f"nav_{_i}", use_container_width=True):
                 st.session_state.nav_view = _key
                 st.session_state.show_magkein = False
                 st.rerun()
 
         st.divider()
 
-        # MAGKEIN ұяшығы
-        _mg_bg = "#2d7a2d" if _mg_on else "#185FA5"
-        st.markdown(
-            f"<div style='background:{_mg_bg};color:white;padding:8px 12px;"
-            f"border-radius:8px;margin-bottom:4px;font-weight:700;font-size:13px;'>"
-            f"📊 Отчёт MAGKEIN</div>",
-            unsafe_allow_html=True
-        )
-        if st.button("📊 Отчёт MAGKEIN", key="mg_toggle_btn", use_container_width=True):
+        # MAGKEIN батырмасы
+        _mg_border = "3px solid #2d7a2d" if _mg_on else "1px solid #dde3ef"
+        _mg_bg2    = "#EBF7EB" if _mg_on else "white"
+        _mg_fw     = "700" if _mg_on else "500"
+        st.markdown(f"""
+        <style>
+        div[data-testid="stButton"]:has(button[key="mg_toggle_btn"]) button {{
+            background:{_mg_bg2} !important;
+            border:{_mg_border} !important;
+            border-radius:10px !important;
+            padding:10px 14px !important;
+            text-align:left !important;
+            height:auto !important;
+            color:#1a1a2e !important;
+            font-weight:{_mg_fw} !important;
+            box-shadow:none !important;
+        }}
+        </style>""", unsafe_allow_html=True)
+        if st.button("📊 Отчёт MAGKEIN\nВсе магазины", key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
             st.rerun()
-
 
     else:
         for _s in visible_stores:
@@ -1374,9 +1395,35 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**Фильтры**")
-    filter_status = st.selectbox("Статус остатка", [
-        "Все", "Ноль", "Мало (1–200)", "Хорошо (201–500)", "Достаточно (500+)"
-    ])
+
+    # ВБ Кабинеты — дүкен + остаток статусы
+    def _store_status_label(store):
+        _df = st.session_state.get(f"df_{store['idx']}")
+        if _df is None or (hasattr(_df, 'empty') and _df.empty):
+            return f"⚪ {store['name']}"
+        _zero = int((_df["qty"] == 0).sum())
+        _low  = int(((_df["qty"] >= 1) & (_df["qty"] <= 200)).sum())
+        _tot  = len(_df)
+        if _zero > 0:
+            return f"⚫ {store['name']} — Ноль ({_zero})"
+        elif _low > _tot * 0.5:
+            return f"🔴 {store['name']} — Мало ({_low})"
+        else:
+            return f"🟢 {store['name']}"
+
+    _cabinet_options = ["Все кабинеты"] + [_store_status_label(s) for s in visible_stores]
+    _cab_sel = st.selectbox("ВБ Кабинеты", _cabinet_options)
+
+    # Таңдалған дүкенге автонавигация
+    if _cab_sel != "Все кабинеты":
+        for _ci, _cs in enumerate(visible_stores):
+            if _cs["name"] in _cab_sel:
+                if st.session_state.get("nav_view") != f"store_{_ci}":
+                    st.session_state.nav_view = f"store_{_ci}"
+                    st.session_state.show_magkein = False
+                    st.rerun()
+
+    filter_status = "Все"  # статус фильтрі алынды
     search = st.text_input("🔍 Поиск по артикулу")
     st.markdown("""
     <div style='font-size:11px;color:#854F0B;background:#FAEEDA;padding:8px;border-radius:6px;margin-top:8px;'>
