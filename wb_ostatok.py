@@ -522,69 +522,20 @@ def show_feedback_tab(store):
         st.warning("⚠️ Secrets-ке STORE_{n}_FEEDBACK токенін қосыңыз")
         return
 
-    auto_key = f"fb_auto_{idx}"
-    if auto_key not in st.session_state:
-        st.session_state[auto_key] = {"auto_reply": True, "auto_complaint": True}
-    auto_cfg = st.session_state[auto_key]
-
+    # Деректерді жүктеу
     load_key = f"fb_data_{idx}"
     if load_key not in st.session_state:
         st.session_state[load_key] = None
 
-    col_load, col_auto1, col_auto2 = st.columns([2, 1.5, 1.5])
-    with col_load:
-        if st.button("🔄 Жүктеу", key=f"fb_load_{idx}", use_container_width=True):
-            with st.spinner("Жүктелуде..."):
-                feedbacks = fetch_feedbacks(fb_key, is_answered=False, take=30)
-                questions = fetch_questions(fb_key, is_answered=False, take=30)
-                complaints_data = load_json(f"/tmp/wb_complaints_{idx}.json")
-                st.session_state[load_key] = {
-                    "feedbacks": feedbacks,
-                    "questions": questions,
-                    "complaints": complaints_data
-                }
-
-                if auto_cfg["auto_complaint"]:
-                    for fb in feedbacks:
-                        rating = fb.get("productValuation") or fb.get("rating") or 0
-                        fb_id = fb.get("id", "")
-                        if rating <= 3 and fb_id and fb_id not in complaints_data:
-                            time.sleep(1.1)
-                            ok = send_feedback_complaint(fb_key, fb_id)
-                            if ok:
-                                complaints_data[fb_id] = "sent"
-                                save_json(f"/tmp/wb_complaints_{idx}.json", complaints_data)
-
-                if auto_cfg["auto_reply"]:
-                    auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
-                    for fb in feedbacks:
-                        rating = fb.get("productValuation") or fb.get("rating") or 0
-                        fb_id = fb.get("id", "")
-                        text = fb.get("text", "")
-                        pros_a = fb.get("pros", "") or ""
-                        cons_a = fb.get("cons", "") or ""
-                        pd_ = fb.get("productDetails", {}) or {}
-                        product = pd_.get("productName", "") or fb.get("productName", "")
-                        bables_a = ", ".join(fb.get("bables", []) or [])
-                        if rating >= 4 and fb_id and fb_id not in auto_replied and text:
-                            time.sleep(1.1)
-                            reply = ai_generate_reply(product, text, rating, "feedback", pros_a, cons_a, bables_a, fb.get("orderStatus", ""))
-                            ok = send_feedback_reply(fb_key, fb_id, reply)
-                            if ok:
-                                auto_replied[fb_id] = reply
-                                save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-
-                st.rerun()
-
-    with col_auto1:
-        new_val1 = st.toggle("Авто жауап (4-5★)", value=auto_cfg["auto_reply"], key=f"toggle_reply_{idx}")
-        if new_val1 != auto_cfg["auto_reply"]:
-            st.session_state[auto_key]["auto_reply"] = new_val1
-
-    with col_auto2:
-        new_val2 = st.toggle("Авто жалоб (1-3★)", value=auto_cfg["auto_complaint"], key=f"toggle_comp_{idx}")
-        if new_val2 != auto_cfg["auto_complaint"]:
-            st.session_state[auto_key]["auto_complaint"] = new_val2
+    if st.button("🔄 Жүктеу", key=f"fb_load_{idx}", use_container_width=False):
+        with st.spinner("Жүктелуде..."):
+            feedbacks = fetch_feedbacks(fb_key, is_answered=False, take=30)
+            questions = fetch_questions(fb_key, is_answered=False, take=30)
+            st.session_state[load_key] = {
+                "feedbacks": feedbacks,
+                "questions": questions,
+            }
+            st.rerun()
 
     data = st.session_state[load_key]
     if data is None:
@@ -593,25 +544,25 @@ def show_feedback_tab(store):
 
     feedbacks = data.get("feedbacks", [])
     questions = data.get("questions", [])
-    complaints = data.get("complaints", {})
     auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
 
+    # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("⭐ Жаңа отзыв", len(feedbacks))
     c2.metric("❓ Авто вопросы", len(questions), help="Сұрақтарға қолмен жауап береді")
-    c3.metric("🤖 Авто жауап", len(auto_replied))
-    c4.metric("✅ Жалоб жіберілді", len(complaints))
-    c5.metric("🔴 1-3 жұлдыз", len(low_star))
+    c3.metric("🤖 Жауап жіберілді", len(auto_replied))
+    c4.metric("🔴 1-3 жұлдыз", len(low_star))
 
     st.divider()
 
-    t1, t2, t3 = st.tabs([
+    # ── 2 ТАБ ──
+    t1, t2 = st.tabs([
         f"⭐ Отзывы ({len(feedbacks)})",
         f"❓ Авто вопросы ({len(questions)})",
-        f"🚨 Жалобы ({len(complaints)})"
     ])
 
+    # ОТЗЫВЫ
     with t1:
         if not feedbacks:
             st.success("✅ Жауапсыз отзыв жоқ!")
@@ -640,11 +591,9 @@ def show_feedback_tab(store):
                         st.caption(f'"{text[:200]}{"..." if len(text)>200 else ""}"')
                 with col2:
                     if rating <= 3:
-                        if fb_id in complaints:
-                            st.caption("🚨 жалоб жіберілді")
-                        else:
-                            st.caption("🔴 жалоб күтілуде")
+                        st.caption("🔴 1-3 жұлдыз")
 
+                # Жіберілген жауап
                 if fb_id in auto_replied:
                     reply_text = auto_replied[fb_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
@@ -656,6 +605,7 @@ def show_feedback_tab(store):
                         with st.expander("Жауапты көру"):
                             st.caption(reply_text)
 
+                # Preview режимі
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
                     edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
@@ -677,6 +627,7 @@ def show_feedback_tab(store):
                             del st.session_state[preview_key_fb]
                             st.rerun()
 
+                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 ИИ жауап жасау", key=f"ai_fb_{fb_id}", use_container_width=True):
                         with st.spinner("ИИ жазып жатыр..."):
@@ -686,6 +637,7 @@ def show_feedback_tab(store):
 
                 st.divider()
 
+    # ВОПРОСЫ
     with t2:
         if not questions:
             st.success("✅ Жауапсыз сұрақ жоқ!")
@@ -706,6 +658,7 @@ def show_feedback_tab(store):
                 with col2:
                     pass
 
+                # Жіберілген жауап
                 if q_id in auto_replied:
                     reply_text = auto_replied[q_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text:
@@ -717,6 +670,7 @@ def show_feedback_tab(store):
                         with st.expander("Жауапты көру"):
                             st.caption(reply_text)
 
+                # Preview режимі
                 elif preview_key_q in st.session_state:
                     preview_text = st.session_state[preview_key_q]
                     edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_q_{q_id}", height=100)
@@ -738,6 +692,7 @@ def show_feedback_tab(store):
                             del st.session_state[preview_key_q]
                             st.rerun()
 
+                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 ИИ жауап жасау", key=f"ai_q_{q_id}", use_container_width=True):
                         with st.spinner("ИИ жазып жатыр..."):
@@ -747,12 +702,6 @@ def show_feedback_tab(store):
 
                 st.divider()
 
-    with t3:
-        if not complaints:
-            st.info("Жалоб жоқ")
-        else:
-            for fb_id, status in complaints.items():
-                st.markdown(f"🚨 ID: `{fb_id[:8]}...` — **{status}**")
 
 def show_finance_tab(store, df):
     idx = store["idx"]
@@ -761,7 +710,7 @@ def show_finance_tab(store, df):
     name = store["name"]
     role = st.session_state.get("role", "manager")
 
-    st.markdown("#### 💰 Финансовый отчет")
+    st.markdown("#### 💰 Финансы отчет")
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
