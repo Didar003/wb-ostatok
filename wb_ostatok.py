@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, date
@@ -1333,97 +1334,114 @@ with st.sidebar:
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
 
-        # Дүкен карточкалары — тек батырма, CSS арқылы стильдеу
+        # ВБ Кабинеты — custom HTML dropdown
+        _initials = lambda name: "".join([w[0].upper() for w in name.split()[:2]])
+        _colors = [
+            ("#E6F1FB","#0C447C"), ("#E1F5EE","#085041"),
+            ("#FAEEDA","#633806"), ("#FBEAF0","#72243E"),
+            ("#EAF3DE","#27500A"), ("#FCEBEB","#791F1F"),
+        ]
+        _cur_view = st.session_state.get("nav_view", "store_0")
+        _mg_on    = st.session_state.get("show_magkein", False)
+
+        # Таңдалған дүкен атауы
+        try:
+            _cur_idx = int(_cur_view.split("_")[1])
+        except:
+            _cur_idx = 0
+        if _mg_on:
+            _cur_label = "📊 Отчёт MAGKEIN"
+        elif 0 <= _cur_idx < len(visible_stores):
+            _cur_label = visible_stores[_cur_idx]["name"]
+        else:
+            _cur_label = "Выберите кабинет"
+
+        # Дүкен опциялары HTML
+        _opts_html = ""
         for _i, _s in enumerate(visible_stores):
-            _key = f"store_{_i}"
-            _active = (_cur_view == _key) and not _mg_on
-            _has_data = f"df_{_s['idx']}" in st.session_state
+            _bg, _fg = _colors[_i % len(_colors)]
+            _init = _initials(_s["name"])
+            _opts_html += f"""
+            <div class="wb-opt" data-idx="{_i}" style="padding:10px 14px;cursor:pointer;
+              display:flex;align-items:center;gap:10px;border-bottom:0.5px solid #eee;"
+              onclick="wbSelect({_i}, '{_s['name'].replace("'","\\'")}')">
+              <div style="width:32px;height:32px;border-radius:50%;background:{_bg};
+                display:flex;align-items:center;justify-content:center;
+                font-size:11px;font-weight:500;color:{_fg};flex-shrink:0;">{_init}</div>
+              <div style="font-size:14px;color:#1a1a2e;">{_s['name']}</div>
+            </div>"""
 
-            _border = "3px solid #185FA5" if _active else "1px solid #dde3ef"
-            _bg     = "#EBF2FF" if _active else "white"
-            _fw     = "700" if _active else "500"
+        _dropdown_html = f"""
+        <div style="position:relative;width:100%;font-family:sans-serif;" id="wb-dd-wrap">
+          <div id="wb-dd-btn" onclick="wbToggle()" style="
+            background:white;border:0.5px solid #dde3ef;border-radius:10px;
+            padding:10px 14px;display:flex;align-items:center;
+            justify-content:space-between;cursor:pointer;font-size:14px;color:#1a1a2e;">
+            <span id="wb-selected">{_cur_label}</span>
+            <span id="wb-chevron" style="font-size:12px;color:#888;transition:transform 0.2s;">▼</span>
+          </div>
+          <div id="wb-dd-list" style="display:none;background:white;
+            border:0.5px solid #dde3ef;border-radius:10px;margin-top:4px;overflow:hidden;">
+            <div class="wb-opt" data-idx="-1" style="padding:10px 14px;cursor:pointer;
+              font-size:14px;color:#1a1a2e;border-bottom:0.5px solid #eee;"
+              onclick="wbSelect(-1,'Все кабинеты')">Все кабинеты</div>
+            {_opts_html}
+            <div class="wb-opt" data-idx="99" style="padding:10px 14px;cursor:pointer;
+              display:flex;align-items:center;gap:10px;font-size:14px;color:#1a1a2e;"
+              onclick="wbSelect(99,'MAGKEIN')">
+              <div style="width:32px;height:32px;border-radius:50%;background:#EAF3DE;
+                display:flex;align-items:center;justify-content:center;font-size:11px;
+                font-weight:500;color:#27500A;flex-shrink:0;">MG</div>
+              <div>📊 MAGKEIN</div>
+            </div>
+          </div>
+        </div>
+        <input type="hidden" id="wb-nav-val" value="">
+        <script>
+        let wbOpen=false;
+        function wbToggle(){{
+          wbOpen=!wbOpen;
+          document.getElementById('wb-dd-list').style.display=wbOpen?'block':'none';
+          document.getElementById('wb-chevron').style.transform=wbOpen?'rotate(180deg)':'';
+        }}
+        function wbSelect(idx, name){{
+          document.getElementById('wb-selected').textContent=name;
+          document.getElementById('wb-dd-list').style.display='none';
+          document.getElementById('wb-chevron').style.transform='';
+          wbOpen=false;
+          const inp=window.parent.document.querySelector('input[data-wb-nav]');
+          const ta=document.getElementById('wb-nav-val');
+          ta.value=idx;
+          ta.dispatchEvent(new Event('input'));
+        }}
+        document.querySelectorAll('.wb-opt').forEach(o=>{{
+          o.addEventListener('mouseenter',()=>o.style.background='#f5f7fa');
+          o.addEventListener('mouseleave',()=>o.style.background='');
+        }});
+        </script>"""
 
-            st.markdown(f"""
-            <style>
-            div[data-testid="stButton"]:has(button[key="nav_{_i}"]) button {{
-                background:{_bg} !important;
-                border:{_border} !important;
-                border-radius:10px !important;
-                padding:10px 14px !important;
-                text-align:left !important;
-                height:auto !important;
-                white-space:pre-wrap !important;
-                color:#1a1a2e !important;
-                font-weight:{_fw} !important;
-                box-shadow:none !important;
-            }}
-            </style>""", unsafe_allow_html=True)
+        components.html(_dropdown_html, height=52, scrolling=False)
 
-            _btn_label = _s['name']
-            if st.button(_btn_label, key=f"nav_{_i}", use_container_width=True):
-                st.session_state.nav_view = _key
-                st.session_state.show_magkein = False
-                st.rerun()
+        # Streamlit-тің нативті жасырын selectbox — навигация үшін
+        _nav_options = ["—"] + [s["name"] for s in visible_stores] + ["MAGKEIN"]
+        _nav_sel = st.selectbox("ВБ Кабинеты", _nav_options,
+                                label_visibility="collapsed", key="wb_nav_select")
+        if _nav_sel and _nav_sel != "—":
+            if _nav_sel == "MAGKEIN":
+                if not st.session_state.get("show_magkein"):
+                    st.session_state.show_magkein = True
+                    st.rerun()
+            else:
+                for _ci, _cs in enumerate(visible_stores):
+                    if _cs["name"] == _nav_sel:
+                        if st.session_state.get("nav_view") != f"store_{_ci}" or st.session_state.get("show_magkein"):
+                            st.session_state.nav_view = f"store_{_ci}"
+                            st.session_state.show_magkein = False
+                            st.rerun()
 
         st.divider()
 
-        # MAGKEIN батырмасы
-        _mg_border = "3px solid #2d7a2d" if _mg_on else "1px solid #dde3ef"
-        _mg_bg2    = "#EBF7EB" if _mg_on else "white"
-        _mg_fw     = "700" if _mg_on else "500"
-        st.markdown(f"""
-        <style>
-        div[data-testid="stButton"]:has(button[key="mg_toggle_btn"]) button {{
-            background:{_mg_bg2} !important;
-            border:{_mg_border} !important;
-            border-radius:10px !important;
-            padding:10px 14px !important;
-            text-align:left !important;
-            height:auto !important;
-            color:#1a1a2e !important;
-            font-weight:{_mg_fw} !important;
-            box-shadow:none !important;
-        }}
-        </style>""", unsafe_allow_html=True)
-        if st.button("📊 Отчёт MAGKEIN\nВсе магазины", key="mg_toggle_btn", use_container_width=True):
-            st.session_state.show_magkein = not _mg_on
-            st.rerun()
-
-    else:
-        for _s in visible_stores:
-            st.markdown(f"**{_s['name']}**")
-
-    st.divider()
-    st.markdown("**Фильтры**")
-
-    # ВБ Кабинеты — дүкен + остаток статусы
-    def _store_status_label(store):
-        _df = st.session_state.get(f"df_{store['idx']}")
-        if _df is None or (hasattr(_df, 'empty') and _df.empty):
-            return f"⚪ {store['name']}"
-        _zero = int((_df["qty"] == 0).sum())
-        _low  = int(((_df["qty"] >= 1) & (_df["qty"] <= 200)).sum())
-        _tot  = len(_df)
-        if _zero > 0:
-            return f"⚫ {store['name']} — Ноль ({_zero})"
-        elif _low > _tot * 0.5:
-            return f"🔴 {store['name']} — Мало ({_low})"
-        else:
-            return f"🟢 {store['name']}"
-
-    _cabinet_options = ["Все кабинеты"] + [_store_status_label(s) for s in visible_stores]
-    _cab_sel = st.selectbox("ВБ Кабинеты", _cabinet_options)
-
-    # Таңдалған дүкенге автонавигация
-    if _cab_sel != "Все кабинеты":
-        for _ci, _cs in enumerate(visible_stores):
-            if _cs["name"] in _cab_sel:
-                if st.session_state.get("nav_view") != f"store_{_ci}":
-                    st.session_state.nav_view = f"store_{_ci}"
-                    st.session_state.show_magkein = False
-                    st.rerun()
-
-    filter_status = "Все"  # статус фильтрі алынды
+        # MAGKEIN батырмасы жоқ — dropdown арқылы ашылады
     search = st.text_input("🔍 Поиск по артикулу")
     st.markdown("""
     <div style='font-size:11px;color:#854F0B;background:#FAEEDA;padding:8px;border-radius:6px;margin-top:8px;'>
