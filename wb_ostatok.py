@@ -1348,7 +1348,7 @@ with st.sidebar:
                 f"{_dot} {_s['name']}</div>",
                 unsafe_allow_html=True
             )
-            if st.button(_s["name"], key=f"nav_{_i}", use_container_width=True, label_visibility="collapsed"):
+            if st.button(_s["name"], key=f"nav_{_i}", use_container_width=True):
                 st.session_state.nav_view = _key
                 st.session_state.show_magkein = False
                 st.rerun()
@@ -1363,7 +1363,7 @@ with st.sidebar:
             f"📊 Отчёт MAGKEIN</div>",
             unsafe_allow_html=True
         )
-        if st.button("📊 Отчёт MAGKEIN", key="mg_toggle_btn", use_container_width=True, label_visibility="collapsed"):
+        if st.button("📊 Отчёт MAGKEIN", key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
             st.rerun()
 
