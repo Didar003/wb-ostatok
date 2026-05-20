@@ -1664,6 +1664,49 @@ if _show_magkein:
             chart_df = mg_df[mg_df["Магазин"] != "🔷 ИТОГО (MAGKEIN)"][["Магазин", "Чистая прибыль (₸)"]].set_index("Магазин")
             st.bar_chart(chart_df, height=300)
 
+            # ── АРТИКУЛ БОЙЫНША ЖИЫНТЫҚ КЕСТЕ ──
+            st.divider()
+            st.markdown("#### 📦 Продажи по артикулам (все магазины)")
+
+            # Барлық дүкеннің артикулдарын біріктіру
+            art_combined = {}  # {article: {store_name: qty, ...}}
+            for s in visible_stores:
+                fin = mg_results.get(s["name"], {})
+                by_art = fin.get("by_article", {})
+                for art, data in by_art.items():
+                    if art not in art_combined:
+                        art_combined[art] = {}
+                    art_combined[art][s["name"]] = data.get("qty", 0)
+
+            if art_combined:
+                store_names_list = [s["name"] for s in visible_stores if mg_results.get(s["name"])]
+                art_rows = []
+                for art, store_qtys in art_combined.items():
+                    total_art_qty = sum(store_qtys.values())
+                    row = {"Артикул": art}
+                    for sn in store_names_list:
+                        row[sn] = store_qtys.get(sn, 0)
+                    row["ИТОГО (шт)"] = total_art_qty
+                    art_rows.append(row)
+
+                art_df = pd.DataFrame(art_rows).sort_values("ИТОГО (шт)", ascending=False).reset_index(drop=True)
+
+                def style_art(row):
+                    if row["ИТОГО (шт)"] == art_df["ИТОГО (шт)"].max():
+                        return ["background-color:#EAF3DE"] * len(row)
+                    return [""] * len(row)
+
+                col_cfg = {"ИТОГО (шт)": st.column_config.NumberColumn(format="%d шт")}
+                for sn in store_names_list:
+                    col_cfg[sn] = st.column_config.NumberColumn(format="%d шт")
+
+                st.dataframe(
+                    art_df.style.apply(style_art, axis=1),
+                    use_container_width=True,
+                    height=min(400, 40 + len(art_df) * 35),
+                    column_config=col_cfg
+                )
+
             # EXCEL ЖҮКТЕУ
             st.divider()
             buf_mg = io.BytesIO()
