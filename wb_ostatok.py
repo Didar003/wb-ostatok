@@ -1362,6 +1362,12 @@ with st.sidebar:
         if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
             st.rerun()
+
+    else:
+        for _s in visible_stores:
+            st.markdown(f"**{_s['name']}**")
+
+    st.divider()
     search = st.text_input("🔍 Поиск по артикулу")
     st.markdown("""
     <div style='font-size:11px;color:#854F0B;background:#FAEEDA;padding:8px;border-radius:6px;margin-top:8px;'>
@@ -1612,4 +1618,4 @@ else:
         st.info("👈 Нажмите **«Загрузить все»**")
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
-        show_store(_store, st.session_state[_df_key], _sales30, filter_status, search)
+        show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
