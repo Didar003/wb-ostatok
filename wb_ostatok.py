@@ -7,11 +7,12 @@ import io
 import time
 import json
 import os
+import base64
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
 
-# Тұрақты деректер қоймасы — app директориясында
+# Тұрақты деректер қоймасы
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wb_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -19,10 +20,82 @@ FBO_FILE    = os.path.join(DATA_DIR, "fbo_data.json")
 SEBEST_FILE = os.path.join(DATA_DIR, "sebest_data.json")
 
 def _tmp(name):
-    """Уақытша файлдар (автожауап, жалоб) — сессия ішінде ғана"""
     return os.path.join(DATA_DIR, name)
 
+# ── GITHUB АВТОСАҚТАУ ──────────────────────────────────────────
+def _gh_headers():
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    if not token:
+        return None
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+def _gh_repo():
+    return st.secrets.get("GITHUB_REPO", "")   # "Didar003/wb-ostatok"
+
+def _gh_branch():
+    return st.secrets.get("GITHUB_BRANCH", "main")
+
+def github_load(filename):
+    """GitHub-тан файлды оқу"""
+    headers = _gh_headers()
+    repo    = _gh_repo()
+    if not headers or not repo:
+        return None
+    try:
+        url = f"https://api.github.com/repos/{repo}/contents/wb_data/{filename}"
+        r = requests.get(url, headers=headers, params={"ref": _gh_branch()}, timeout=10)
+        if r.status_code == 200:
+            content = base64.b64decode(r.json()["content"]).decode("utf-8")
+            return json.loads(content)
+    except:
+        pass
+    return None
+
+def github_save(filename, data):
+    """GitHub-қа файлды сақтау (автоcommit)"""
+    headers = _gh_headers()
+    repo    = _gh_repo()
+    if not headers or not repo:
+        return False
+    try:
+        url = f"https://api.github.com/repos/{repo}/contents/wb_data/{filename}"
+        # Бар файлдың SHA-сын алу
+        sha = None
+        r = requests.get(url, headers=headers, params={"ref": _gh_branch()}, timeout=10)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+        # Жаңа мазмұн
+        content_b64 = base64.b64encode(
+            json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        ).decode("utf-8")
+        payload = {
+            "message": f"auto: update {filename}",
+            "content": content_b64,
+            "branch": _gh_branch(),
+        }
+        if sha:
+            payload["sha"] = sha
+        r2 = requests.put(url, headers=headers, json=payload, timeout=15)
+        return r2.status_code in (200, 201)
+    except:
+        return False
+
 def load_json(path):
+    """Алдымен GitHub-тан, болмаса локалдан оқу"""
+    filename = os.path.basename(path)
+    # GitHub-тан оқу (тек маңызды файлдар)
+    if filename in ("sebest_data.json", "fbo_data.json"):
+        gh_data = github_load(filename)
+        if gh_data is not None:
+            # Локалға да жаз (кэш ретінде)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(gh_data, f, ensure_ascii=False, indent=2)
+            except:
+                pass
+            return gh_data
+    # Локалдан оқу
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -32,12 +105,17 @@ def load_json(path):
     return {}
 
 def save_json(path, data):
+    """Локалға + GitHub-қа сақтау"""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        st.warning(f"Не сохранено: {e}")
+        st.warning(f"Не сохранено локально: {e}")
+    # GitHub-қа автосақтау (тек маңызды файлдар)
+    filename = os.path.basename(path)
+    if filename in ("sebest_data.json", "fbo_data.json"):
+        github_save(filename, data)
 
 def check_password():
     if st.session_state.get("role"):
