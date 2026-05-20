@@ -106,25 +106,44 @@ def wb_get_retry(url, key, params={}, max_retries=3, store_name=""):
 
 def fetch_warehouse_remains(analytics_key):
     base = "https://seller-analytics-api.wildberries.ru"
-    r = requests.get(f"{base}/api/v1/warehouse_remains",
-                     headers={"Authorization": analytics_key},
-                     params={"groupBySa": "true"}, timeout=30)
-    r.raise_for_status()
+    # 429 retry — 3 попытки
+    for attempt in range(3):
+        r = requests.get(f"{base}/api/v1/warehouse_remains",
+                         headers={"Authorization": analytics_key},
+                         params={"groupBySa": "true"}, timeout=30)
+        if r.status_code == 429:
+            st.info("⏳ WB Analytics лимит — ждём 65 сек...")
+            time.sleep(65)
+            continue
+        r.raise_for_status()
+        break
+    else:
+        raise Exception("Превышен лимит запросов WB Analytics")
+
     task_id = r.json()["data"]["taskId"]
-    for _ in range(24):
+    for _ in range(30):
         time.sleep(5)
         r2 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/status",
                           headers={"Authorization": analytics_key}, timeout=30)
+        if r2.status_code == 429:
+            time.sleep(65)
+            continue
         r2.raise_for_status()
         status = r2.json()["data"]["status"]
         if status == "done":
             break
         elif status in ["failed", "error"]:
-            raise Exception(f"Ошибка: {status}")
-    r3 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/download",
-                      headers={"Authorization": analytics_key}, timeout=60)
-    r3.raise_for_status()
-    return r3.json()
+            raise Exception(f"Ошибка задачи: {status}")
+
+    for attempt in range(3):
+        r3 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/download",
+                          headers={"Authorization": analytics_key}, timeout=60)
+        if r3.status_code == 429:
+            time.sleep(65)
+            continue
+        r3.raise_for_status()
+        return r3.json()
+    raise Exception("Не удалось скачать остатки")
 
 def parse_remains(data):
     rows = []
@@ -1324,6 +1343,33 @@ with st.sidebar:
         if st.button(mg_label, key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not st.session_state.get("show_magkein", False)
             st.rerun()
+        # Общий ИП — из кэша финансов
+        _all_seb = load_json(SEBEST_FILE)
+        _total_profit = 0
+        _has_fin = False
+        for _s in visible_stores:
+            _fin = st.session_state.get(f"finance_{_s['idx']}")
+            if _fin:
+                _has_fin = True
+                _seb = _all_seb.get(str(_s["idx"]), {})
+                _fp = _fin.get("for_pay", 0)
+                _napay = _fp - _fin.get("ads",0) - _fin.get("logistic",0) - _fin.get("storage",0) - _fin.get("priemka",0) - _fin.get("penalty",0) - _fin.get("vozvrat",0)*2
+                _tot_seb = sum(_seb.get(a,0)*_fin.get("by_article",{}).get(a,{}).get("qty",0) for a in _fin.get("by_article",{}))
+                _tot_qty = sum(_fin.get("by_article",{}).get(a,{}).get("qty",0) for a in _fin.get("by_article",{}))
+                _do_ipn = _napay - _tot_seb
+                _ipn = _do_ipn * 0.10 if _do_ipn > 0 else 0
+                _ndv = (_napay*(16/116)) - (_tot_seb*(16/116))
+                _pack = _tot_qty * 100
+                _man = st.session_state.get(f"fin_manual_{_s['idx']}", {"logistic":0,"samovykup":0,"reklama_napay":0})
+                _total_profit += _do_ipn - _ipn - _ndv - _pack - _man["logistic"] - _man["samovykup"] - _man["reklama_napay"]
+        if _has_fin:
+            _clr = "#2d7a2d" if _total_profit >= 0 else "#A32D2D"
+            _val = f"{round(_total_profit):,} ₸".replace(",", " ")
+            st.markdown(f"""<div style='background:#F0F7F0;border-left:3px solid {_clr};
+            padding:8px 12px;border-radius:4px;margin-top:6px;'>
+            <div style='font-size:11px;color:#666;'>Общий ИП (все магазины)</div>
+            <div style='font-size:16px;font-weight:700;color:{_clr};'>{_val}</div>
+            </div>""", unsafe_allow_html=True)
     st.divider()
     st.markdown("**Фильтры**")
     filter_status = st.selectbox("Статус остатка", [
