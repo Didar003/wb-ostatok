@@ -36,7 +36,7 @@ def save_json(path, data):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        st.warning(f"Сақталмады: {e}")
+        st.warning(f"Не сохранено: {e}")
 
 def check_password():
     if st.session_state.get("role"):
@@ -120,7 +120,7 @@ def fetch_warehouse_remains(analytics_key):
         if status == "done":
             break
         elif status in ["failed", "error"]:
-            raise Exception(f"Қате: {status}")
+            raise Exception(f"Ошибка: {status}")
     r3 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/download",
                       headers={"Authorization": analytics_key}, timeout=60)
     r3.raise_for_status()
@@ -265,7 +265,7 @@ def load_store_data(store):
 
     if analytics_key:
         try:
-            with st.spinner(f"[{name}] Остатки және FBO жүктелуде..."):
+            with st.spinner(f"[{name}] Загрузка остатков и FBO..."):
                 remains_data = fetch_warehouse_remains(analytics_key)
                 agg = parse_remains(remains_data)
         except Exception as e:
@@ -273,7 +273,7 @@ def load_store_data(store):
             agg = pd.DataFrame()
     else:
         try:
-            with st.spinner(f"[{name}] Остатки жүктелуде..."):
+            with st.spinner(f"[{name}] Загрузка остатков..."):
                 stocks_raw = wb_get_retry(
                     "https://statistics-api.wildberries.ru/api/v1/supplier/stocks",
                     stats_key, {"dateFrom": "2019-01-01"}, store_name=name
@@ -291,7 +291,7 @@ def load_store_data(store):
     time.sleep(3)
 
     try:
-        with st.spinner(f"[{name}] Продажи жүктелуде..."):
+        with st.spinner(f"[{name}] Загрузка продаж..."):
             sales_raw = wb_get_retry(
                 "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
                 stats_key, {"dateFrom": days_ago_str(20), "flag": 0}, store_name=name
@@ -321,7 +321,7 @@ def load_store_data(store):
 
     sales30 = pd.DataFrame()
     try:
-        with st.spinner(f"[{name}] Аналитика жүктелуде..."):
+        with st.spinner(f"[{name}] Загрузка аналитики..."):
             orders_raw = wb_get_retry(
                 "https://statistics-api.wildberries.ru/api/v1/supplier/orders",
                 stats_key, {"dateFrom": days_ago_str(90), "flag": 0}, store_name=name
@@ -374,13 +374,13 @@ def fetch_feedbacks(fb_key, is_answered=False, take=20):
             timeout=30
         )
         if r.status_code not in (200, 201, 204):
-            st.error(f"Feedbacks API қатесі: {r.status_code} — {r.text[:200]}")
+            st.error(f"Feedbacks API ошибка: {r.status_code} — {r.text[:200]}")
             return []
         data = r.json()
         feedbacks = data.get("data", {}).get("feedbacks", []) or []
         return feedbacks
     except Exception as e:
-        st.error(f"Feedbacks қатесі: {e}")
+        st.error(f"Feedbacks ошибка: {e}")
         return []
 
 def fetch_questions(fb_key, is_answered=False, take=20):
@@ -392,12 +392,12 @@ def fetch_questions(fb_key, is_answered=False, take=20):
             timeout=30
         )
         if r.status_code not in (200, 201, 204):
-            st.error(f"Questions API қатесі: {r.status_code} — {r.text[:200]}")
+            st.error(f"Questions API ошибка: {r.status_code} — {r.text[:200]}")
             return []
         data = r.json()
         return data.get("data", {}).get("questions", []) or data.get("questions", []) or []
     except Exception as e:
-        st.error(f"Questions қатесі: {e}")
+        st.error(f"Questions ошибка: {e}")
         return []
 
 def send_feedback_reply(fb_key, feedback_id, text):
@@ -409,10 +409,10 @@ def send_feedback_reply(fb_key, feedback_id, text):
             timeout=30
         )
         if r.status_code not in (200, 201, 204):
-            st.error(f"WB жауап қатесі {r.status_code}: {r.text[:300]}")
+            st.error(f"Ошибка ответа WB {r.status_code}: {r.text[:300]}")
         return r.status_code in (200, 201, 204)
     except Exception as e:
-        st.error(f"send_feedback_reply қатесі: {e}")
+        st.error(f"send_feedback_reply ошибка: {e}")
         return False
 
 def send_question_reply(fb_key, question_id, text):
@@ -424,10 +424,10 @@ def send_question_reply(fb_key, question_id, text):
             timeout=30
         )
         if r.status_code not in (200, 201, 204):
-            st.error(f"WB сұрақ қатесі {r.status_code}: {r.text[:300]}")
+            st.error(f"Ошибка вопроса WB {r.status_code}: {r.text[:300]}")
         return r.status_code in (200, 201, 204)
     except Exception as e:
-        st.error(f"send_question_reply қатесі: {e}")
+        st.error(f"send_question_reply ошибка: {e}")
         return False
 
 def send_feedback_complaint(fb_key, feedback_id):
@@ -490,7 +490,7 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
         if not anthropic_key:
             return "⚠️ ANTHROPIC_API_KEY Secrets-ке қосылмаған"
 
-        # 529 қатесі болса 3 рет қайталайды
+        # 529 ошибка болса 3 рет қайталайды
         for attempt in range(3):
             r = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -515,7 +515,7 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
         return "⚠️ Anthropic сервері бос емес, кейінірек қайталаңыз"
 
     except Exception as e:
-        return f"ИИ қатесі: {e}"
+        return f"ИИ ошибка: {e}"
 
 def render_stars(rating):
     filled = "★" * rating
@@ -528,7 +528,7 @@ def show_feedback_tab(store):
     fb_key = store.get("feedback_key", "")
 
     if not fb_key:
-        st.warning("⚠️ Secrets-ке STORE_{n}_FEEDBACK токенін қосыңыз")
+        st.warning("⚠️ Добавьте токен STORE_{n}_FEEDBACK в Secrets")
         return
 
     # Деректерді жүктеу
@@ -536,8 +536,8 @@ def show_feedback_tab(store):
     if load_key not in st.session_state:
         st.session_state[load_key] = None
 
-    if st.button("🔄 Жүктеу", key=f"fb_load_{idx}", use_container_width=False):
-        with st.spinner("Жүктелуде..."):
+    if st.button("🔄 Загрузить", key=f"fb_load_{idx}", use_container_width=False):
+        with st.spinner("Загрузка..."):
             feedbacks = fetch_feedbacks(fb_key, is_answered=False, take=30)
             questions = fetch_questions(fb_key, is_answered=False, take=30)
             st.session_state[load_key] = {
@@ -548,7 +548,7 @@ def show_feedback_tab(store):
 
     data = st.session_state[load_key]
     if data is None:
-        st.info("👆 **«Жүктеу»** батырмасын басыңыз")
+        st.info("👆 Нажмите кнопку **«Загрузить»**")
         return
 
     feedbacks = data.get("feedbacks", [])
@@ -558,10 +558,10 @@ def show_feedback_tab(store):
     # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("⭐ Жаңа отзыв", len(feedbacks))
-    c2.metric("❓ Авто вопросы", len(questions), help="Сұрақтарға қолмен жауап береді")
-    c3.metric("🤖 Жауап жіберілді", len(auto_replied))
-    c4.metric("🔴 1-3 жұлдыз", len(low_star))
+    c1.metric("⭐ Новые отзывы", len(feedbacks))
+    c2.metric("❓ Вопросы", len(questions), help="Ответьте вручную")
+    c3.metric("🤖 Ответов отправлено", len(auto_replied))
+    c4.metric("🔴 1-3 звезды", len(low_star))
 
     st.divider()
 
@@ -574,7 +574,7 @@ def show_feedback_tab(store):
     # ОТЗЫВЫ
     with t1:
         if not feedbacks:
-            st.success("✅ Жауапсыз отзыв жоқ!")
+            st.success("✅ Нет неотвеченных отзывов!")
         for fb in feedbacks:
             fb_id = fb.get("id", "")
             rating = fb.get("productValuation") or fb.get("rating") or 0
@@ -600,28 +600,28 @@ def show_feedback_tab(store):
                         st.caption(f'"{text[:200]}{"..." if len(text)>200 else ""}"')
                 with col2:
                     if rating <= 3:
-                        st.caption("🔴 1-3 жұлдыз")
+                        st.caption("🔴 1-3 звезды")
 
                 # Жіберілген жауап
                 if fb_id in auto_replied:
                     reply_text = auto_replied[fb_id]
-                    if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
+                    if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
                         del auto_replied[fb_id]
                         save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
-                        st.warning("⚠️ Қате жауап тазаланды")
+                        st.warning("⚠️ Ошибочный ответ удалён")
                     else:
                         st.success("✅ Опубликован")
-                        with st.expander("Жауапты көру"):
+                        with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
 
                 # Preview режимі
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
-                    edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
+                    edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("📤 Опубликовать", key=f"pub_fb_{fb_id}", use_container_width=True):
-                            with st.spinner("Жіберілуде..."):
+                            with st.spinner("Отправляется..."):
                                 time.sleep(1.1)
                                 ok = send_feedback_reply(fb_key, fb_id, edited)
                                 if ok:
@@ -630,16 +630,16 @@ def show_feedback_tab(store):
                                     del st.session_state[preview_key_fb]
                                     st.rerun()
                                 else:
-                                    st.error("Жіберілмеді")
+                                    st.error("Не отправлено")
                     with c2:
-                        if st.button("🗑 Жою", key=f"del_fb_{fb_id}", use_container_width=True):
+                        if st.button("🗑 Удалить", key=f"del_fb_{fb_id}", use_container_width=True):
                             del st.session_state[preview_key_fb]
                             st.rerun()
 
                 # ИИ жауап батырмасы
                 else:
-                    if st.button("🤖 ИИ жауап жасау", key=f"ai_fb_{fb_id}", use_container_width=True):
-                        with st.spinner("ИИ жазып жатыр..."):
+                    if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_fb_{fb_id}", use_container_width=True):
+                        with st.spinner("ИИ генерирует ответ..."):
                             reply = ai_generate_reply(product, text, rating, "feedback", pros, cons, bables_text, order_status)
                             st.session_state[preview_key_fb] = reply
                             st.rerun()
@@ -649,7 +649,7 @@ def show_feedback_tab(store):
     # ВОПРОСЫ
     with t2:
         if not questions:
-            st.success("✅ Жауапсыз сұрақ жоқ!")
+            st.success("✅ Нет неотвеченных вопросов!")
         for q in questions:
             q_id = q.get("id", "")
             q_text = q.get("text", "") or ""
@@ -670,23 +670,23 @@ def show_feedback_tab(store):
                 # Жіберілген жауап
                 if q_id in auto_replied:
                     reply_text = auto_replied[q_id]
-                    if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text:
+                    if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text:
                         del auto_replied[q_id]
                         save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
-                        st.warning("⚠️ Қате жауап тазаланды")
+                        st.warning("⚠️ Ошибочный ответ удалён")
                     else:
                         st.success("✅ Опубликован")
-                        with st.expander("Жауапты көру"):
+                        with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
 
                 # Preview режимі
                 elif preview_key_q in st.session_state:
                     preview_text = st.session_state[preview_key_q]
-                    edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_q_{q_id}", height=100)
+                    edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_q_{q_id}", height=100)
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("📤 Опубликовать", key=f"pub_q_{q_id}", use_container_width=True):
-                            with st.spinner("Жіберілуде..."):
+                            with st.spinner("Отправляется..."):
                                 time.sleep(1.1)
                                 ok = send_question_reply(fb_key, q_id, edited)
                                 if ok:
@@ -695,16 +695,16 @@ def show_feedback_tab(store):
                                     del st.session_state[preview_key_q]
                                     st.rerun()
                                 else:
-                                    st.error("Жіберілмеді")
+                                    st.error("Не отправлено")
                     with c2:
-                        if st.button("🗑 Жою", key=f"del_q_{q_id}", use_container_width=True):
+                        if st.button("🗑 Удалить", key=f"del_q_{q_id}", use_container_width=True):
                             del st.session_state[preview_key_q]
                             st.rerun()
 
                 # ИИ жауап батырмасы
                 else:
-                    if st.button("🤖 ИИ жауап жасау", key=f"ai_q_{q_id}", use_container_width=True):
-                        with st.spinner("ИИ жазып жатыр..."):
+                    if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_q_{q_id}", use_container_width=True):
+                        with st.spinner("ИИ генерирует ответ..."):
                             reply = ai_generate_reply(product, q_text, 5, "question")
                             st.session_state[preview_key_q] = reply
                             st.rerun()
@@ -719,18 +719,18 @@ def show_finance_tab(store, df):
     name = store["name"]
     role = st.session_state.get("role", "manager")
 
-    st.markdown("#### 💰 Финансы отчет")
+    st.markdown("#### 💰 Финансовый отчёт")
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        date_from = st.date_input("Басталу күні", value=date.today() - timedelta(days=7),
+        date_from = st.date_input("Начало периода", value=date.today() - timedelta(days=7),
                                    key=f"fin_from_{idx}")
     with col2:
-        date_to = st.date_input("Аяқталу күні", value=date.today(),
+        date_to = st.date_input("Конец периода", value=date.today(),
                                  key=f"fin_to_{idx}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        load_fin = st.button("🔄 Финансы жүктеу", key=f"fin_load_{idx}", use_container_width=True)
+        load_fin = st.button("🔄 Загрузить финансы", key=f"fin_load_{idx}", use_container_width=True)
 
     fin_key = f"finance_{idx}"
     use_key = finance_key if finance_key else stats_key
@@ -743,7 +743,7 @@ def show_finance_tab(store, df):
         st.session_state[period_key] = current_period
 
     if load_fin:
-        with st.spinner(f"[{name}] Финансы отчеті жүктелуде..."):
+        with st.spinner(f"[{name}] Загрузка финансового отчёта..."):
             try:
                 rows = fetch_report_detail(
                     use_key,
@@ -753,12 +753,12 @@ def show_finance_tab(store, df):
                 )
                 fin = parse_finance(rows)
                 st.session_state[fin_key] = fin
-                st.success("✅ Жүктелді!")
+                st.success("✅ Загружено!")
             except Exception as e:
-                st.error(f"Қате: {e}")
+                st.error(f"Ошибка: {e}")
 
     if fin_key not in st.session_state:
-        st.info("👆 Период таңдап **«Финансы жүктеу»** батырмасын басыңыз")
+        st.info("👆 Выберите период и нажмите **«Загрузить финансы»**")
         return
 
     fin = st.session_state[fin_key]
@@ -819,7 +819,7 @@ def show_finance_tab(store, df):
     col_left, col_right = st.columns(2)
 
     with col_left:
-        st.markdown("**🧮 Кіріс / Шығыс**")
+        st.markdown("**🧮 Доходы / Расходы**")
         rows_ui = [
             ("авто", "К перечислению", fmt(for_pay), "blue"),
             ("авто", "Удержания (реклама WB)", f"- {fmt(ads)}", "red"),
@@ -874,19 +874,19 @@ def show_finance_tab(store, df):
         r1.caption("[авто] ИПН 10%")
         r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(ipn)}</p>", unsafe_allow_html=True)
         st.divider()
-        st.markdown(f"### Таза пайда: :green[{fmt(profit)}]")
+        st.markdown(f"### Чистая прибыль: :green[{fmt(profit)}]")
         if for_pay > 0:
             st.caption(f"Рентабельность: {profit/for_pay*100:.1f}%")
 
     with col_right:
-        st.markdown("**🧾 НДС есебі**")
+        st.markdown("**🧾 Расчёт НДС**")
         st.markdown(f"- НДС жалпы: {fmt(ndv_total)}")
         st.markdown(f"- НДС приход (себест×16/116): {fmt(ndv_prikhod)}")
         st.markdown(f"- **НДС наше: :red[-{fmt(ndv_nashe)}]**")
         st.divider()
 
-        st.markdown("**📊 Сатылым**")
-        st.markdown(f"- Жалпы сатылды: **{fmtN(total_qty)} шт**")
+        st.markdown("**📊 Продажи**")
+        st.markdown(f"- Всего продано: **{fmtN(total_qty)} шт**")
         st.markdown(f"- Возврат: :red[**{fmtN(vozvrat_qty)} шт**]")
         st.markdown(f"- Нақты: **{fmtN(total_qty - vozvrat_qty)} шт**")
         st.markdown(f"- Хранение: :red[{fmt(storage)}]")
@@ -915,21 +915,21 @@ def show_finance_tab(store, df):
             pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
             excel_rows.append({
                 "Артикул": art,
-                "Сатылды (шт)": qty_a,
-                "WB түскен (₸)": round(wb_a),
+                "Продано (шт)": qty_a,
+                "WB получено (₸)": round(wb_a),
                 "Себест/шт (₸)": sebest_a,
                 "Реклама (₸)": reklama_a,
-                "Таза пайда (₸)": round(profit_a),
+                "Чистая прибыль (₸)": round(profit_a),
                 "Рентабельность (%)": round(pct_a, 1),
             })
 
         summary = {
-            "Артикул": "ЖАЛПЫ",
-            "Сатылды (шт)": total_qty,
-            "WB түскен (₸)": round(for_pay),
+            "Артикул": "ИТОГО",
+            "Продано (шт)": total_qty,
+            "WB получено (₸)": round(for_pay),
             "Себест/шт (₸)": "",
             "Реклама (₸)": sum(r["Реклама (₸)"] for r in excel_rows),
-            "Таза пайда (₸)": round(profit),
+            "Чистая прибыль (₸)": round(profit),
             "Рентабельность (%)": round(profit/for_pay*100, 1) if for_pay > 0 else 0,
         }
         excel_rows.append(summary)
@@ -997,7 +997,7 @@ def show_finance_tab(store, df):
         row += 1
         ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = BOLD12
         row += 1
-        prod_headers = ["Артикул", "Сатылды (шт)", "WB түскен (₸)", "Себест/шт (₸)", "Реклама (₸)", "Таза пайда (₸)", "Рентабельность (%)"]
+        prod_headers = ["Артикул", "Продано (шт)", "WB получено (₸)", "Себест/шт (₸)", "Реклама (₸)", "Чистая прибыль (₸)", "Рентабельность (%)"]
         prod_hdr_row = row
         for col, h in enumerate(prod_headers, 1):
             c = ws.cell(row, col, h)
@@ -1005,11 +1005,11 @@ def show_finance_tab(store, df):
             c.fill = LIGHT_GREEN_FILL
         row += 1
         for r in excel_rows:
-            vals = [r["Артикул"], r["Сатылды (шт)"], r["WB түскен (₸)"],
-                    r["Себест/шт (₸)"], r["Реклама (₸)"], r["Таза пайда (₸)"], r["Рентабельность (%)"]]
+            vals = [r["Артикул"], r["Продано (шт)"], r["WB получено (₸)"],
+                    r["Себест/шт (₸)"], r["Реклама (₸)"], r["Чистая прибыль (₸)"], r["Рентабельность (%)"]]
             for col, v in enumerate(vals, 1):
                 ws.cell(row, col, v)
-            pval = r["Таза пайда (₸)"]
+            pval = r["Чистая прибыль (₸)"]
             if r["Артикул"] == "ЖАЛПЫ":
                 pf = GREEN_FILL if (profit >= 0) else RED_FILL
                 for col in range(1, 8):
@@ -1024,7 +1024,7 @@ def show_finance_tab(store, df):
         row += 1
         ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = BOLD12
         row += 1
-        seb_headers = ["Артикул", "Сатылды (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Жалпы (₸)"]
+        seb_headers = ["Артикул", "Продано (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Итого (₸)"]
         seb_hdr_row = row
         for col, h in enumerate(seb_headers, 1):
             c = ws.cell(row, col, h)
@@ -1050,7 +1050,7 @@ def show_finance_tab(store, df):
 
         period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
         st.download_button(
-            f"⬇️ Excel жүктеу — {store['name']} ({period_str})",
+            f"⬇️ Скачать Excel — {store['name']} ({period_str})",
             data=buf.getvalue(),
             file_name=f"Финансы_{store['name']}_{period_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1065,7 +1065,7 @@ def show_finance_tab(store, df):
     ads_by_art = st.session_state[ads_key]
 
     if by_article:
-        with st.expander("📦 Тауар бойынша таза пайда", expanded=True):
+        with st.expander("📦 Чистая прибыль по товарам", expanded=True):
             prod_rows = []
             for art, data in by_article.items():
                 qty_a = data.get("qty", 0)
@@ -1087,11 +1087,11 @@ def show_finance_tab(store, df):
                 pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
                 prod_rows.append({
                     "Артикул": art,
-                    "Сатылды (шт)": qty_a,
-                    "WB түскен (₸)": round(wb_a),
+                    "Продано (шт)": qty_a,
+                    "WB получено (₸)": round(wb_a),
                     "Себест/шт (₸)": sebest_a,
                     "Реклама (₸)": reklama_a,
-                    "Таза пайда (₸)": round(profit_a),
+                    "Чистая прибыль (₸)": round(profit_a),
                     "%": round(pct_a, 1),
                 })
             prod_df = pd.DataFrame(prod_rows)
@@ -1100,18 +1100,18 @@ def show_finance_tab(store, df):
                 if pd.isna(val): return ""
                 return "color: #3B6D11; font-weight: bold" if val >= 0 else "color: #A32D2D; font-weight: bold"
 
-            styled = prod_df.style.map(style_profit, subset=["Таза пайда (₸)", "%"])
+            styled = prod_df.style.map(style_profit, subset=["Чистая прибыль (₸)", "%"])
             st.dataframe(styled, use_container_width=True, height=400,
                 column_config={
-                    "WB түскен (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "WB получено (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "Реклама (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                    "Таза пайда (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Чистая прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "%": st.column_config.NumberColumn(format="%.1f%%"),
                 })
 
             if role == "manager":
                 st.divider()
-                st.caption("✏️ Реклама — тауар бойынша қолмен енгізіңіз")
+                st.caption("✏️ Реклама — введите вручную по товару")
                 ads_tbl = pd.DataFrame([
                     {"Артикул": art, "Реклама (₸)": ads_by_art.get(art, 0)}
                     for art in by_article.keys()
@@ -1131,7 +1131,7 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    with st.expander("🗂️ Себестоимость — тауар бойынша", expanded=False):
+    with st.expander("🗂️ Себестоимость — по товарам", expanded=False):
         if by_article:
             seb_rows = []
             for art, data in by_article.items():
@@ -1139,23 +1139,23 @@ def show_finance_tab(store, df):
                 sebest_a = seb_data.get(art, 0)
                 seb_rows.append({
                     "Артикул": art,
-                    "Сатылды (шт)": qty_a,
+                    "Продано (шт)": qty_a,
                     "Себест/шт (₸)": sebest_a,
                     "Упаковка (₸)": qty_a * 100,
-                    "Жалпы (₸)": qty_a * sebest_a,
+                    "Итого (₸)": qty_a * sebest_a,
                 })
             seb_df = pd.DataFrame(seb_rows)
 
             if role == "manager":
-                st.caption("✏️ Себест/шт бағанын өзгертіп Enter басыңыз — барлығы автоматты жаңарады")
+                st.caption("✏️ Измените Себест/шт и нажмите Enter — всё обновится автоматически")
                 edited_seb = st.data_editor(
                     seb_df, use_container_width=True, height=400,
                     column_config={
                         "Артикул": st.column_config.TextColumn(disabled=True),
-                        "Сатылды (шт)": st.column_config.NumberColumn(format="%d шт", disabled=True),
+                        "Продано (шт)": st.column_config.NumberColumn(format="%d шт", disabled=True),
                         "Себест/шт (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
                         "Упаковка (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
-                        "Жалпы (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
+                        "Итого (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
                     }
                 )
                 new_seb = dict(zip(edited_seb["Артикул"], edited_seb["Себест/шт (₸)"]))
@@ -1171,33 +1171,33 @@ def show_store(store, df, sales30, filter_status, search):
     role = st.session_state.get("role", "manager")
 
     if df.empty:
-        st.warning("Деректер жоқ немесе жүктелмеді")
+        st.warning("Нет данных или не загружено")
         return
 
     tab_ostatok, tab_analytic, tab_finance, tab_feedback = st.tabs([
-        "📦 Остатки", "📊 Аналитика — 30 күн", "💰 Финансы", "💬 Отзывы & Вопросы"
+        "📦 Остатки", "📊 Аналитика — 30 дней", "💰 Финансы", "💬 Отзывы & Вопросы"
     ])
 
     with tab_analytic:
         if sales30 is None or sales30.empty:
-            st.info("Деректер жоқ")
+            st.info("Нет данных")
         else:
             total_qty = int(sales30["Заказ (шт)"].sum())
             total_rev = sales30["Выручка (₸)"].sum()
             avg_day = total_qty / 30
             best_day = sales30.loc[sales30["Заказ (шт)"].idxmax()]
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("📦 Жалпы заказ", f"{total_qty:,} шт".replace(",", " "))
-            c2.metric("💰 Жалпы выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
-            c3.metric("📈 Күндік орта", f"{avg_day:.1f} шт")
-            c4.metric("🏆 Ең жақсы күн", f"{best_day['Дата']} — {best_day['Заказ (шт)']} шт")
+            c1.metric("📦 Всего заказов", f"{total_qty:,} шт".replace(",", " "))
+            c2.metric("💰 Общая выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
+            c3.metric("📈 Среднее в день", f"{avg_day:.1f} шт")
+            c4.metric("🏆 Лучший день", f"{best_day['Дата']} — {best_day['Заказ (шт)']} шт")
             st.divider()
-            st.markdown("#### 📊 Күн бойынша заказдар (соңғы 30 күн)")
+            st.markdown("#### 📊 Заказы по дням (последние 30 дней)")
             st.bar_chart(sales30.set_index("Дата")[["Заказ (шт)"]], height=300)
-            st.markdown("#### 💰 Күн бойынша выручка")
+            st.markdown("#### 💰 Выручка по дням")
             st.line_chart(sales30.set_index("Дата")[["Выручка (₸)"]], height=250)
             st.divider()
-            st.markdown("#### 📋 Күнделікті кесте")
+            st.markdown("#### 📋 Таблица по дням")
             disp = sales30.copy()
             disp["Выручка (₸)"] = disp["Выручка (₸)"].round(0).astype(int)
             st.dataframe(disp.sort_values("Дата", ascending=False).reset_index(drop=True),
@@ -1226,7 +1226,7 @@ def show_store(store, df, sales30, filter_status, search):
         c1.metric("📦 Общий остаток", f"{int(df['total'].sum()):,} шт".replace(",", " "))
         c2.metric("📊 Позиций", len(df))
         c3.metric("🔴 Критические", int(df["turnover"].dropna().apply(lambda x: x <= 10).sum()))
-        c4.metric("⚫ Ноль остаток", int((df["qty"] == 0).sum()))
+        c4.metric("⚫ Нулевой остаток", int((df["qty"] == 0).sum()))
         st.divider()
         st.markdown("#### 📊 Итоговый отчёт")
 
@@ -1306,17 +1306,17 @@ else:
 with st.sidebar:
     st.header("⚙️ Настройки")
     if not visible_stores:
-        st.warning("Магазин жоқ!")
+        st.warning("Нет магазинов!")
     else:
         for s in visible_stores:
             has_fin = "✅" if s["finance_key"] else "⚠️"
             st.markdown(f"**{s['name']}** {has_fin}")
-    fetch_btn = st.button("🔄 Барлығын жүктеу", use_container_width=True)
+    fetch_btn = st.button("🔄 Загрузить все", use_container_width=True)
     st.divider()
     store_count = len(visible_stores)
     if st.session_state.get("role", "manager") == "manager":
         mg_active = st.session_state.get("show_magkein", False)
-        mg_label = "✅ MAGKEIN — жабу" if mg_active else "📊 MAGKEIN отчеті"
+        mg_label = "✅ MAGKEIN — закрыть" if mg_active else "📊 Отчёт MAGKEIN"
         mg_color = "#2d7a2d" if mg_active else "#185FA5"
         st.markdown(f"""<style>div[data-testid='stButton'] button[kind='secondary']{{
         background:{mg_color};color:white;border:none;font-weight:700;
@@ -1325,7 +1325,7 @@ with st.sidebar:
             st.session_state.show_magkein = not st.session_state.get("show_magkein", False)
             st.rerun()
     st.divider()
-    st.markdown("**Фильтрлер**")
+    st.markdown("**Фильтры**")
     filter_status = st.selectbox("Статус остатка", [
         "Все", "Ноль", "Мало (1–200)", "Хорошо (201–500)", "Достаточно (500+)"
     ])
@@ -1340,11 +1340,11 @@ with st.sidebar:
         st.rerun()
 
 # ── НЕГІЗГІ ──
-st.title("📦 Wildberries отчёт")
+st.title("📦 Wildberries Отчёт")
 st.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
 if not visible_stores:
-    st.info("👈 Secrets-ке магазин деректерін қосыңыз")
+    st.info("👈 Добавьте данные магазинов в Secrets")
     st.stop()
 
 if fetch_btn:
@@ -1354,7 +1354,7 @@ if fetch_btn:
         st.session_state[f"sales30_{s['idx']}"] = sales30
         for e in errors:
             st.warning(f"[{s['name']}] ⚠️ {e}")
-    st.success("✅ Барлық магазин жүктелді!")
+    st.success("✅ Все магазины загружены!")
     st.rerun()
 
 _show_magkein = (
@@ -1363,21 +1363,18 @@ _show_magkein = (
 )
 
 if _show_magkein:
-    st.markdown('## 📊 MAGKEIN — Жалпы қаржы отчеті')
-    st.markdown('Барлық дүкендердің біріктірілген қаржы нәтижесі')
-    st.divider()
-    st.markdown("## 📊 MAGKEIN — Жалпы қаржы отчеті")
-    st.markdown("Барлық дүкендердің біріктірілген қаржы нәтижесі")
+    st.markdown('## 📊 MAGKEIN — Общий финансовый отчёт')
+    st.markdown('Объединённые результаты всех магазинов')
     st.divider()
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        mg_date_from = st.date_input("Басталу күні", value=date.today() - timedelta(days=7), key="mg_from")
+        mg_date_from = st.date_input("Начало периода", value=date.today() - timedelta(days=7), key="mg_from")
     with col2:
-        mg_date_to = st.date_input("Аяқталу күні", value=date.today(), key="mg_to")
+        mg_date_to = st.date_input("Конец периода", value=date.today(), key="mg_to")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        mg_load = st.button("🔄 Барлығын жүктеу", key="mg_load", use_container_width=True)
+        mg_load = st.button("🔄 Загрузить все", key="mg_load", use_container_width=True)
 
     mg_key = "magkein_data"
     mg_period_key = "magkein_period"
@@ -1391,7 +1388,7 @@ if _show_magkein:
         mg_results = {}
         for s in visible_stores:
             use_key = s["finance_key"] if s["finance_key"] else s["stats_key"]
-            with st.spinner(f"[{s['name']}] жүктелуде..."):
+            with st.spinner(f"[{s['name']}] загружается..."):
                 try:
                     rows = fetch_report_detail(
                         use_key,
@@ -1402,13 +1399,13 @@ if _show_magkein:
                     fin = parse_finance(rows)
                     mg_results[s["name"]] = fin
                 except Exception as e:
-                    st.error(f"[{s['name']}] қате: {e}")
+                    st.error(f"[{s['name']}] ошибка: {e}")
                     mg_results[s["name"]] = {}
         st.session_state[mg_key] = mg_results
         st.rerun()
 
     if mg_key not in st.session_state:
-        st.info("👆 Период таңдап **«Барлығын жүктеу»** батырмасын басыңыз")
+        st.info("👆 Период таңдап **«Загрузить все»** нажмите кнопку")
     else:
         mg_results = st.session_state[mg_key]
         all_seb = load_json(SEBEST_FILE)
@@ -1455,13 +1452,13 @@ if _show_magkein:
             profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
 
             summary_rows.append({
-                "Дүкен": s["name"],
+                "Магазин": s["name"],
                 "К перечислению (₸)": round(for_pay),
                 "На пэй (₸)": round(napay),
                 "Себестоимость (₸)": round(tot_seb),
-                "Сатылды (шт)": t_qty,
+                "Продано (шт)": t_qty,
                 "Возврат (шт)": vozvrat_qty,
-                "Таза пайда (₸)": round(profit),
+                "Чистая прибыль (₸)": round(profit),
                 "Рентабельность (%)": round(profit / for_pay * 100, 1) if for_pay > 0 else 0,
             })
             total_for_pay     += for_pay
@@ -1471,7 +1468,7 @@ if _show_magkein:
             total_vozvrat_qty += vozvrat_qty
 
         if not summary_rows:
-            st.warning("Деректер жоқ")
+            st.warning("Нет данных")
         else:
             # ЖАЛПЫ МЕТРИКАЛАР
             c1, c2, c3, c4 = st.columns(4)
@@ -1484,26 +1481,26 @@ if _show_magkein:
             st.divider()
 
             # ДҮКЕН БОЙЫНША КЕСТЕ
-            st.markdown("#### 🏪 Дүкен бойынша салыстыру")
+            st.markdown("#### 🏪 Сравнение по магазинам")
 
             # Жалпы жол қосу
             summary_rows.append({
-                "Дүкен": "🔷 ЖАЛПЫ (MAGKEIN)",
+                "Магазин": "🔷 ИТОГО (MAGKEIN)",
                 "К перечислению (₸)": round(total_for_pay),
                 "На пэй (₸)": round(total_napay),
                 "Себестоимость (₸)": sum(r["Себестоимость (₸)"] for r in summary_rows),
-                "Сатылды (шт)": total_qty,
+                "Продано (шт)": total_qty,
                 "Возврат (шт)": total_vozvrat_qty,
-                "Таза пайда (₸)": round(total_profit),
+                "Чистая прибыль (₸)": round(total_profit),
                 "Рентабельность (%)": round(total_profit / total_for_pay * 100, 1) if total_for_pay > 0 else 0,
             })
 
             mg_df = pd.DataFrame(summary_rows)
 
             def style_mg(row):
-                if row["Дүкен"].startswith("🔷"):
+                if row["Магазин"].startswith("🔷"):
                     return ["font-weight:bold; background-color:#E6F1FB"] * len(row)
-                profit_val = row["Таза пайда (₸)"]
+                profit_val = row["Чистая прибыль (₸)"]
                 if isinstance(profit_val, (int, float)) and profit_val < 0:
                     return ["background-color:#FCEBEB"] * len(row)
                 return [""] * len(row)
@@ -1514,17 +1511,17 @@ if _show_magkein:
                     "К перечислению (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "На пэй (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "Себестоимость (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                    "Сатылды (шт)": st.column_config.NumberColumn(format="%d шт"),
+                    "Продано (шт)": st.column_config.NumberColumn(format="%d шт"),
                     "Возврат (шт)": st.column_config.NumberColumn(format="%d шт"),
-                    "Таза пайда (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Чистая прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "Рентабельность (%)": st.column_config.NumberColumn(format="%.1f%%"),
                 })
 
             st.divider()
 
             # ДИАГРАММА — таза пайда салыстыру
-            st.markdown("#### 📊 Дүкендер бойынша таза пайда")
-            chart_df = mg_df[mg_df["Дүкен"] != "🔷 ЖАЛПЫ (MAGKEIN)"][["Дүкен", "Таза пайда (₸)"]].set_index("Дүкен")
+            st.markdown("#### 📊 Чистая прибыль по магазинам")
+            chart_df = mg_df[mg_df["Магазин"] != "🔷 ИТОГО (MAGKEIN)"][["Магазин", "Чистая прибыль (₸)"]].set_index("Магазин")
             st.bar_chart(chart_df, height=300)
 
             # EXCEL ЖҮКТЕУ
@@ -1536,8 +1533,8 @@ if _show_magkein:
             _ws_mg = _wb_mg.active
             _ws_mg.title = "MAGKEIN отчет"
 
-            headers_mg = ["Дүкен", "К перечислению (₸)", "На пэй (₸)", "Себестоимость (₸)",
-                          "Сатылды (шт)", "Возврат (шт)", "Таза пайда (₸)", "Рентабельность (%)"]
+            headers_mg = ["Магазин", "К перечислению (₸)", "На пэй (₸)", "Себестоимость (₸)",
+                          "Продано (шт)", "Возврат (шт)", "Чистая прибыль (₸)", "Рентабельность (%)"]
             for col, h in enumerate(headers_mg, 1):
                 c = _ws_mg.cell(1, col, h)
                 c.font = _Font2(bold=True)
@@ -1547,7 +1544,7 @@ if _show_magkein:
                 vals = [row[h] for h in headers_mg]
                 for col, v in enumerate(vals, 1):
                     cell = _ws_mg.cell(r_idx, col, v)
-                    if row["Дүкен"].startswith("🔷"):
+                    if row["Магазин"].startswith("🔷"):
                         cell.font = _Font2(bold=True)
                         cell.fill = _Fill2("solid", fgColor="92D050")
 
