@@ -1326,50 +1326,52 @@ with st.sidebar:
     st.header("⚙️ Настройки")
     if not visible_stores:
         st.warning("Нет магазинов!")
-    else:
-        for s in visible_stores:
-            has_fin = "✅" if s["finance_key"] else "⚠️"
-            st.markdown(f"**{s['name']}** {has_fin}")
     fetch_btn = st.button("🔄 Загрузить все", use_container_width=True)
     st.divider()
-    store_count = len(visible_stores)
+
     if st.session_state.get("role", "manager") == "manager":
-        mg_active = st.session_state.get("show_magkein", False)
-        mg_label = "✅ MAGKEIN — закрыть" if mg_active else "📊 Отчёт MAGKEIN"
-        mg_color = "#2d7a2d" if mg_active else "#185FA5"
-        st.markdown(f"""<style>div[data-testid='stButton'] button[kind='secondary']{{
-        background:{mg_color};color:white;border:none;font-weight:700;
-        border-radius:8px;padding:10px;}}</style>""", unsafe_allow_html=True)
-        if st.button(mg_label, key="mg_toggle_btn", use_container_width=True):
-            st.session_state.show_magkein = not st.session_state.get("show_magkein", False)
+        _cur_view = st.session_state.get("nav_view", "store_0")
+        _mg_on = st.session_state.get("show_magkein", False)
+
+        # Дүкен ұяшықтары
+        for _i, _s in enumerate(visible_stores):
+            _key = f"store_{_i}"
+            _active = (_cur_view == _key) and not _mg_on
+            _has_data = f"df_{_s['idx']}" in st.session_state
+            _dot = "🟢" if _has_data else "⚪"
+            _bg = "#185FA5" if _active else "#EEF2FA"
+            _fg = "white" if _active else "#1a1a2e"
+            _fw = "700" if _active else "500"
+            st.markdown(
+                f"<div style='background:{_bg};color:{_fg};padding:8px 12px;"
+                f"border-radius:8px;margin-bottom:4px;font-weight:{_fw};font-size:13px;'>"
+                f"{_dot} {_s['name']}</div>",
+                unsafe_allow_html=True
+            )
+            if st.button(_s["name"], key=f"nav_{_i}", use_container_width=True, label_visibility="collapsed"):
+                st.session_state.nav_view = _key
+                st.session_state.show_magkein = False
+                st.rerun()
+
+        st.divider()
+
+        # MAGKEIN ұяшығы
+        _mg_bg = "#2d7a2d" if _mg_on else "#185FA5"
+        st.markdown(
+            f"<div style='background:{_mg_bg};color:white;padding:8px 12px;"
+            f"border-radius:8px;margin-bottom:4px;font-weight:700;font-size:13px;'>"
+            f"📊 Отчёт MAGKEIN</div>",
+            unsafe_allow_html=True
+        )
+        if st.button("📊 Отчёт MAGKEIN", key="mg_toggle_btn", use_container_width=True, label_visibility="collapsed"):
+            st.session_state.show_magkein = not _mg_on
             st.rerun()
-        # Общий ИП — из кэша финансов
-        _all_seb = load_json(SEBEST_FILE)
-        _total_profit = 0
-        _has_fin = False
+
+
+    else:
         for _s in visible_stores:
-            _fin = st.session_state.get(f"finance_{_s['idx']}")
-            if _fin:
-                _has_fin = True
-                _seb = _all_seb.get(str(_s["idx"]), {})
-                _fp = _fin.get("for_pay", 0)
-                _napay = _fp - _fin.get("ads",0) - _fin.get("logistic",0) - _fin.get("storage",0) - _fin.get("priemka",0) - _fin.get("penalty",0) - _fin.get("vozvrat",0)*2
-                _tot_seb = sum(_seb.get(a,0)*_fin.get("by_article",{}).get(a,{}).get("qty",0) for a in _fin.get("by_article",{}))
-                _tot_qty = sum(_fin.get("by_article",{}).get(a,{}).get("qty",0) for a in _fin.get("by_article",{}))
-                _do_ipn = _napay - _tot_seb
-                _ipn = _do_ipn * 0.10 if _do_ipn > 0 else 0
-                _ndv = (_napay*(16/116)) - (_tot_seb*(16/116))
-                _pack = _tot_qty * 100
-                _man = st.session_state.get(f"fin_manual_{_s['idx']}", {"logistic":0,"samovykup":0,"reklama_napay":0})
-                _total_profit += _do_ipn - _ipn - _ndv - _pack - _man["logistic"] - _man["samovykup"] - _man["reklama_napay"]
-        if _has_fin:
-            _clr = "#2d7a2d" if _total_profit >= 0 else "#A32D2D"
-            _val = f"{round(_total_profit):,} ₸".replace(",", " ")
-            st.markdown(f"""<div style='background:#F0F7F0;border-left:3px solid {_clr};
-            padding:8px 12px;border-radius:4px;margin-top:6px;'>
-            <div style='font-size:11px;color:#666;'>Общий ИП (все магазины)</div>
-            <div style='font-size:16px;font-weight:700;color:{_clr};'>{_val}</div>
-            </div>""", unsafe_allow_html=True)
+            st.markdown(f"**{_s['name']}**")
+
     st.divider()
     st.markdown("**Фильтры**")
     filter_status = st.selectbox("Статус остатка", [
@@ -1606,3 +1608,23 @@ if _show_magkein:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="mg_dl"
             )
+
+else:
+    # Дүкен навигациясы — nav_view бойынша
+    _nav = st.session_state.get("nav_view", "store_0")
+    try:
+        _nav_idx = int(_nav.split("_")[1])
+    except:
+        _nav_idx = 0
+    _nav_idx = min(_nav_idx, len(visible_stores) - 1)
+    _store = visible_stores[_nav_idx]
+
+    st.markdown(f"### 🏪 {_store['name']}")
+    st.divider()
+
+    _df_key = f"df_{_store['idx']}"
+    if _df_key not in st.session_state or st.session_state[_df_key] is None:
+        st.info("👈 Нажмите **«Загрузить все»**")
+    else:
+        _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
+        show_store(_store, st.session_state[_df_key], _sales30, filter_status, search)
