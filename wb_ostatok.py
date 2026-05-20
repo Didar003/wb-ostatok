@@ -1348,12 +1348,17 @@ with st.sidebar:
         _nav_sel = st.selectbox("ВБ Кабинеты", _store_names,
                                 index=_store_names.index(_cur_store_name) if _cur_store_name in _store_names else 0,
                                 key="wb_nav_select")
-        for _ci, _cs in enumerate(visible_stores):
-            if _cs["name"] == _nav_sel:
-                if st.session_state.get("nav_view") != f"store_{_ci}" or _mg_on:
+
+        # Тек selectbox өзгергенде навигация — MAGKEIN ашық болса өзгертпе
+        _prev_sel = st.session_state.get("wb_prev_sel", _store_names[0])
+        if _nav_sel != _prev_sel:
+            st.session_state.wb_prev_sel = _nav_sel
+            for _ci, _cs in enumerate(visible_stores):
+                if _cs["name"] == _nav_sel:
                     st.session_state.nav_view = f"store_{_ci}"
                     st.session_state.show_magkein = False
                     st.rerun()
+        st.session_state.wb_prev_sel = _nav_sel
 
         st.divider()
 
