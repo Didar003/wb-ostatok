@@ -1314,13 +1314,16 @@ with st.sidebar:
     fetch_btn = st.button("🔄 Барлығын жүктеу", use_container_width=True)
     st.divider()
     store_count = len(visible_stores)
-    st.markdown(f"""
-    <div style='background:linear-gradient(135deg,#185FA5,#2E86DE);color:white;
-    padding:10px 14px;border-radius:8px;margin-bottom:4px;'>
-    <div style='font-size:13px;font-weight:700;letter-spacing:1px;'>📊 MAGKEIN отчеті</div>
-    <div style='font-size:11px;opacity:0.85;margin-top:2px;'>
-    {store_count} дүкен біріктірілген · соңғы таб ↗</div>
-    </div>""", unsafe_allow_html=True)
+    if st.session_state.get("role", "manager") == "manager":
+        mg_active = st.session_state.get("show_magkein", False)
+        mg_label = "✅ MAGKEIN — жабу" if mg_active else "📊 MAGKEIN отчеті"
+        mg_color = "#2d7a2d" if mg_active else "#185FA5"
+        st.markdown(f"""<style>div[data-testid='stButton'] button[kind='secondary']{{
+        background:{mg_color};color:white;border:none;font-weight:700;
+        border-radius:8px;padding:10px;}}</style>""", unsafe_allow_html=True)
+        if st.button(mg_label, key="mg_toggle_btn", use_container_width=True):
+            st.session_state.show_magkein = not st.session_state.get("show_magkein", False)
+            st.rerun()
     st.divider()
     st.markdown("**Фильтрлер**")
     filter_status = st.selectbox("Статус остатка", [
@@ -1354,221 +1357,209 @@ if fetch_btn:
     st.success("✅ Барлық магазин жүктелді!")
     st.rerun()
 
-tab_names = [s["name"] for s in visible_stores]
-# Тек менеджер MAGKEIN табын көреді
-_show_magkein = st.session_state.get("role", "manager") == "manager" and len(visible_stores) >= 1
+_show_magkein = (
+    st.session_state.get("role", "manager") == "manager"
+    and st.session_state.get("show_magkein", False)
+)
+
 if _show_magkein:
-    tab_names = tab_names + ["📊 MAGKEIN"]
+    st.markdown('## 📊 MAGKEIN — Жалпы қаржы отчеті')
+    st.markdown('Барлық дүкендердің біріктірілген қаржы нәтижесі')
+    st.divider()
+    st.markdown("## 📊 MAGKEIN — Жалпы қаржы отчеті")
+    st.markdown("Барлық дүкендердің біріктірілген қаржы нәтижесі")
+    st.divider()
 
-tabs = st.tabs(tab_names)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        mg_date_from = st.date_input("Басталу күні", value=date.today() - timedelta(days=7), key="mg_from")
+    with col2:
+        mg_date_to = st.date_input("Аяқталу күні", value=date.today(), key="mg_to")
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        mg_load = st.button("🔄 Барлығын жүктеу", key="mg_load", use_container_width=True)
 
-store_tabs = tabs[:len(visible_stores)]
-for tab, store in zip(store_tabs, visible_stores):
-    with tab:
-        df_key = f"df_{store['idx']}"
-        if df_key not in st.session_state or st.session_state[df_key] is None:
-            st.info("👈 **«Барлығын жүктеу»** батырмасын басыңыз")
+    mg_key = "magkein_data"
+    mg_period_key = "magkein_period"
+    current_mg_period = f"{mg_date_from}_{mg_date_to}"
+    if st.session_state.get(mg_period_key) != current_mg_period:
+        if mg_key in st.session_state:
+            del st.session_state[mg_key]
+        st.session_state[mg_period_key] = current_mg_period
+
+    if mg_load:
+        mg_results = {}
+        for s in visible_stores:
+            use_key = s["finance_key"] if s["finance_key"] else s["stats_key"]
+            with st.spinner(f"[{s['name']}] жүктелуде..."):
+                try:
+                    rows = fetch_report_detail(
+                        use_key,
+                        mg_date_from.strftime("%Y-%m-%d"),
+                        mg_date_to.strftime("%Y-%m-%d"),
+                        store_name=s["name"]
+                    )
+                    fin = parse_finance(rows)
+                    mg_results[s["name"]] = fin
+                except Exception as e:
+                    st.error(f"[{s['name']}] қате: {e}")
+                    mg_results[s["name"]] = {}
+        st.session_state[mg_key] = mg_results
+        st.rerun()
+
+    if mg_key not in st.session_state:
+        st.info("👆 Период таңдап **«Барлығын жүктеу»** батырмасын басыңыз")
+    else:
+        mg_results = st.session_state[mg_key]
+        all_seb = load_json(SEBEST_FILE)
+
+        def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
+        def fmtN(n): return f"{round(n):,}".replace(",", " ")
+        ndv_rate = 16 / 116
+
+        # ── ӘР ДҮКЕН БОЙЫНША ЖОЛДАР ──
+        summary_rows = []
+        total_for_pay = total_napay = total_profit = total_qty = total_vozvrat_qty = 0
+
+        for s in visible_stores:
+            fin = mg_results.get(s["name"], {})
+            if not fin:
+                continue
+            idx = s["idx"]
+            seb_data = all_seb.get(str(idx), {})
+            by_article = fin.get("by_article", {})
+
+            for_pay   = fin.get("for_pay", 0)
+            ads       = fin.get("ads", 0)
+            storage   = fin.get("storage", 0)
+            priemka   = fin.get("priemka", 0)
+            penalty   = fin.get("penalty", 0)
+            logistic_auto = fin.get("logistic", 0)
+            vozvrat   = fin.get("vozvrat", 0)
+            vozvrat_qty = fin.get("vozvrat_qty", 0)
+            t_qty     = fin.get("total_qty", 0)
+            vozvrat_sh = vozvrat * 2
+
+            tot_seb   = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
+            tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
+            upakovka  = tot_qty_sold * 100
+
+            napay     = for_pay - ads - logistic_auto - storage - priemka - penalty - vozvrat_sh
+            ndv_nashe = (napay * ndv_rate) - (tot_seb * ndv_rate)
+            do_ipn    = napay - tot_seb
+            ipn       = do_ipn * 0.10 if do_ipn > 0 else 0
+            profit    = do_ipn - ipn - ndv_nashe - upakovka
+
+            # Қолмен енгізілген шығындарды алу
+            man = st.session_state.get(f"fin_manual_{idx}", {"logistic": 0, "samovykup": 0, "reklama_napay": 0})
+            profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
+
+            summary_rows.append({
+                "Дүкен": s["name"],
+                "К перечислению (₸)": round(for_pay),
+                "На пэй (₸)": round(napay),
+                "Себестоимость (₸)": round(tot_seb),
+                "Сатылды (шт)": t_qty,
+                "Возврат (шт)": vozvrat_qty,
+                "Таза пайда (₸)": round(profit),
+                "Рентабельность (%)": round(profit / for_pay * 100, 1) if for_pay > 0 else 0,
+            })
+            total_for_pay     += for_pay
+            total_napay       += napay
+            total_profit      += profit
+            total_qty         += t_qty
+            total_vozvrat_qty += vozvrat_qty
+
+        if not summary_rows:
+            st.warning("Деректер жоқ")
         else:
-            sales30 = st.session_state.get(f"sales30_{store['idx']}", pd.DataFrame())
-            show_store(store, st.session_state[df_key], sales30, filter_status, search)
+            # ЖАЛПЫ МЕТРИКАЛАР
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("💰 К перечислению", fmt(total_for_pay))
+            c2.metric("📊 На пэй (жалпы)", fmt(total_napay))
+            c3.metric("✅ Таза пайда (жалпы)", fmt(total_profit),
+                      delta=f"{total_profit/total_for_pay*100:.1f}%" if total_for_pay > 0 else "0%")
+            c4.metric("📦 Сатылды (жалпы)", f"{fmtN(total_qty)} шт")
 
-# ── MAGKEIN ЖАЛПЫ ОТЧЕТ ──
-if _show_magkein:
-    with tabs[-1]:
-        st.markdown("## 📊 MAGKEIN — Жалпы қаржы отчеті")
-        st.markdown("Барлық дүкендердің біріктірілген қаржы нәтижесі")
-        st.divider()
+            st.divider()
 
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col1:
-            mg_date_from = st.date_input("Басталу күні", value=date.today() - timedelta(days=7), key="mg_from")
-        with col2:
-            mg_date_to = st.date_input("Аяқталу күні", value=date.today(), key="mg_to")
-        with col3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            mg_load = st.button("🔄 Барлығын жүктеу", key="mg_load", use_container_width=True)
+            # ДҮКЕН БОЙЫНША КЕСТЕ
+            st.markdown("#### 🏪 Дүкен бойынша салыстыру")
 
-        mg_key = "magkein_data"
-        mg_period_key = "magkein_period"
-        current_mg_period = f"{mg_date_from}_{mg_date_to}"
-        if st.session_state.get(mg_period_key) != current_mg_period:
-            if mg_key in st.session_state:
-                del st.session_state[mg_key]
-            st.session_state[mg_period_key] = current_mg_period
+            # Жалпы жол қосу
+            summary_rows.append({
+                "Дүкен": "🔷 ЖАЛПЫ (MAGKEIN)",
+                "К перечислению (₸)": round(total_for_pay),
+                "На пэй (₸)": round(total_napay),
+                "Себестоимость (₸)": sum(r["Себестоимость (₸)"] for r in summary_rows),
+                "Сатылды (шт)": total_qty,
+                "Возврат (шт)": total_vozvrat_qty,
+                "Таза пайда (₸)": round(total_profit),
+                "Рентабельность (%)": round(total_profit / total_for_pay * 100, 1) if total_for_pay > 0 else 0,
+            })
 
-        if mg_load:
-            mg_results = {}
-            for s in visible_stores:
-                use_key = s["finance_key"] if s["finance_key"] else s["stats_key"]
-                with st.spinner(f"[{s['name']}] жүктелуде..."):
-                    try:
-                        rows = fetch_report_detail(
-                            use_key,
-                            mg_date_from.strftime("%Y-%m-%d"),
-                            mg_date_to.strftime("%Y-%m-%d"),
-                            store_name=s["name"]
-                        )
-                        fin = parse_finance(rows)
-                        mg_results[s["name"]] = fin
-                    except Exception as e:
-                        st.error(f"[{s['name']}] қате: {e}")
-                        mg_results[s["name"]] = {}
-            st.session_state[mg_key] = mg_results
-            st.rerun()
+            mg_df = pd.DataFrame(summary_rows)
 
-        if mg_key not in st.session_state:
-            st.info("👆 Период таңдап **«Барлығын жүктеу»** батырмасын басыңыз")
-        else:
-            mg_results = st.session_state[mg_key]
-            all_seb = load_json(SEBEST_FILE)
+            def style_mg(row):
+                if row["Дүкен"].startswith("🔷"):
+                    return ["font-weight:bold; background-color:#E6F1FB"] * len(row)
+                profit_val = row["Таза пайда (₸)"]
+                if isinstance(profit_val, (int, float)) and profit_val < 0:
+                    return ["background-color:#FCEBEB"] * len(row)
+                return [""] * len(row)
 
-            def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
-            def fmtN(n): return f"{round(n):,}".replace(",", " ")
-            ndv_rate = 16 / 116
-
-            # ── ӘР ДҮКЕН БОЙЫНША ЖОЛДАР ──
-            summary_rows = []
-            total_for_pay = total_napay = total_profit = total_qty = total_vozvrat_qty = 0
-
-            for s in visible_stores:
-                fin = mg_results.get(s["name"], {})
-                if not fin:
-                    continue
-                idx = s["idx"]
-                seb_data = all_seb.get(str(idx), {})
-                by_article = fin.get("by_article", {})
-
-                for_pay   = fin.get("for_pay", 0)
-                ads       = fin.get("ads", 0)
-                storage   = fin.get("storage", 0)
-                priemka   = fin.get("priemka", 0)
-                penalty   = fin.get("penalty", 0)
-                logistic_auto = fin.get("logistic", 0)
-                vozvrat   = fin.get("vozvrat", 0)
-                vozvrat_qty = fin.get("vozvrat_qty", 0)
-                t_qty     = fin.get("total_qty", 0)
-                vozvrat_sh = vozvrat * 2
-
-                tot_seb   = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
-                tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
-                upakovka  = tot_qty_sold * 100
-
-                napay     = for_pay - ads - logistic_auto - storage - priemka - penalty - vozvrat_sh
-                ndv_nashe = (napay * ndv_rate) - (tot_seb * ndv_rate)
-                do_ipn    = napay - tot_seb
-                ipn       = do_ipn * 0.10 if do_ipn > 0 else 0
-                profit    = do_ipn - ipn - ndv_nashe - upakovka
-
-                # Қолмен енгізілген шығындарды алу
-                man = st.session_state.get(f"fin_manual_{idx}", {"logistic": 0, "samovykup": 0, "reklama_napay": 0})
-                profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
-
-                summary_rows.append({
-                    "Дүкен": s["name"],
-                    "К перечислению (₸)": round(for_pay),
-                    "На пэй (₸)": round(napay),
-                    "Себестоимость (₸)": round(tot_seb),
-                    "Сатылды (шт)": t_qty,
-                    "Возврат (шт)": vozvrat_qty,
-                    "Таза пайда (₸)": round(profit),
-                    "Рентабельность (%)": round(profit / for_pay * 100, 1) if for_pay > 0 else 0,
-                })
-                total_for_pay     += for_pay
-                total_napay       += napay
-                total_profit      += profit
-                total_qty         += t_qty
-                total_vozvrat_qty += vozvrat_qty
-
-            if not summary_rows:
-                st.warning("Деректер жоқ")
-            else:
-                # ЖАЛПЫ МЕТРИКАЛАР
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("💰 К перечислению", fmt(total_for_pay))
-                c2.metric("📊 На пэй (жалпы)", fmt(total_napay))
-                c3.metric("✅ Таза пайда (жалпы)", fmt(total_profit),
-                          delta=f"{total_profit/total_for_pay*100:.1f}%" if total_for_pay > 0 else "0%")
-                c4.metric("📦 Сатылды (жалпы)", f"{fmtN(total_qty)} шт")
-
-                st.divider()
-
-                # ДҮКЕН БОЙЫНША КЕСТЕ
-                st.markdown("#### 🏪 Дүкен бойынша салыстыру")
-
-                # Жалпы жол қосу
-                summary_rows.append({
-                    "Дүкен": "🔷 ЖАЛПЫ (MAGKEIN)",
-                    "К перечислению (₸)": round(total_for_pay),
-                    "На пэй (₸)": round(total_napay),
-                    "Себестоимость (₸)": sum(r["Себестоимость (₸)"] for r in summary_rows),
-                    "Сатылды (шт)": total_qty,
-                    "Возврат (шт)": total_vozvrat_qty,
-                    "Таза пайда (₸)": round(total_profit),
-                    "Рентабельность (%)": round(total_profit / total_for_pay * 100, 1) if total_for_pay > 0 else 0,
+            styled_mg = mg_df.style.apply(style_mg, axis=1)
+            st.dataframe(styled_mg, use_container_width=True, height=200,
+                column_config={
+                    "К перечислению (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "На пэй (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Себестоимость (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Сатылды (шт)": st.column_config.NumberColumn(format="%d шт"),
+                    "Возврат (шт)": st.column_config.NumberColumn(format="%d шт"),
+                    "Таза пайда (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "Рентабельность (%)": st.column_config.NumberColumn(format="%.1f%%"),
                 })
 
-                mg_df = pd.DataFrame(summary_rows)
+            st.divider()
 
-                def style_mg(row):
+            # ДИАГРАММА — таза пайда салыстыру
+            st.markdown("#### 📊 Дүкендер бойынша таза пайда")
+            chart_df = mg_df[mg_df["Дүкен"] != "🔷 ЖАЛПЫ (MAGKEIN)"][["Дүкен", "Таза пайда (₸)"]].set_index("Дүкен")
+            st.bar_chart(chart_df, height=300)
+
+            # EXCEL ЖҮКТЕУ
+            st.divider()
+            buf_mg = io.BytesIO()
+            import openpyxl as _oxl2
+            from openpyxl.styles import Font as _Font2, PatternFill as _Fill2
+            _wb_mg = _oxl2.Workbook()
+            _ws_mg = _wb_mg.active
+            _ws_mg.title = "MAGKEIN отчет"
+
+            headers_mg = ["Дүкен", "К перечислению (₸)", "На пэй (₸)", "Себестоимость (₸)",
+                          "Сатылды (шт)", "Возврат (шт)", "Таза пайда (₸)", "Рентабельность (%)"]
+            for col, h in enumerate(headers_mg, 1):
+                c = _ws_mg.cell(1, col, h)
+                c.font = _Font2(bold=True)
+                c.fill = _Fill2("solid", fgColor="BDD7EE")
+
+            for r_idx, row in enumerate(summary_rows, 2):
+                vals = [row[h] for h in headers_mg]
+                for col, v in enumerate(vals, 1):
+                    cell = _ws_mg.cell(r_idx, col, v)
                     if row["Дүкен"].startswith("🔷"):
-                        return ["font-weight:bold; background-color:#E6F1FB"] * len(row)
-                    profit_val = row["Таза пайда (₸)"]
-                    if isinstance(profit_val, (int, float)) and profit_val < 0:
-                        return ["background-color:#FCEBEB"] * len(row)
-                    return [""] * len(row)
+                        cell.font = _Font2(bold=True)
+                        cell.fill = _Fill2("solid", fgColor="92D050")
 
-                styled_mg = mg_df.style.apply(style_mg, axis=1)
-                st.dataframe(styled_mg, use_container_width=True, height=200,
-                    column_config={
-                        "К перечислению (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                        "На пэй (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                        "Себестоимость (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                        "Сатылды (шт)": st.column_config.NumberColumn(format="%d шт"),
-                        "Возврат (шт)": st.column_config.NumberColumn(format="%d шт"),
-                        "Таза пайда (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                        "Рентабельность (%)": st.column_config.NumberColumn(format="%.1f%%"),
-                    })
+            for col_ltr in ["A","B","C","D","E","F","G","H"]:
+                _ws_mg.column_dimensions[col_ltr].width = 22
+            _wb_mg.save(buf_mg)
 
-                st.divider()
-
-                # ДИАГРАММА — таза пайда салыстыру
-                st.markdown("#### 📊 Дүкендер бойынша таза пайда")
-                chart_df = mg_df[mg_df["Дүкен"] != "🔷 ЖАЛПЫ (MAGKEIN)"][["Дүкен", "Таза пайда (₸)"]].set_index("Дүкен")
-                st.bar_chart(chart_df, height=300)
-
-                # EXCEL ЖҮКТЕУ
-                st.divider()
-                buf_mg = io.BytesIO()
-                import openpyxl as _oxl2
-                from openpyxl.styles import Font as _Font2, PatternFill as _Fill2
-                _wb_mg = _oxl2.Workbook()
-                _ws_mg = _wb_mg.active
-                _ws_mg.title = "MAGKEIN отчет"
-
-                headers_mg = ["Дүкен", "К перечислению (₸)", "На пэй (₸)", "Себестоимость (₸)",
-                              "Сатылды (шт)", "Возврат (шт)", "Таза пайда (₸)", "Рентабельность (%)"]
-                for col, h in enumerate(headers_mg, 1):
-                    c = _ws_mg.cell(1, col, h)
-                    c.font = _Font2(bold=True)
-                    c.fill = _Fill2("solid", fgColor="BDD7EE")
-
-                for r_idx, row in enumerate(summary_rows, 2):
-                    vals = [row[h] for h in headers_mg]
-                    for col, v in enumerate(vals, 1):
-                        cell = _ws_mg.cell(r_idx, col, v)
-                        if row["Дүкен"].startswith("🔷"):
-                            cell.font = _Font2(bold=True)
-                            cell.fill = _Fill2("solid", fgColor="92D050")
-
-                for col_ltr in ["A","B","C","D","E","F","G","H"]:
-                    _ws_mg.column_dimensions[col_ltr].width = 22
-                _wb_mg.save(buf_mg)
-
-                period_str = f"{mg_date_from.strftime('%d.%m')}-{mg_date_to.strftime('%d.%m.%Y')}"
-                st.download_button(
-                    f"⬇️ Excel — MAGKEIN ({period_str})",
-                    data=buf_mg.getvalue(),
-                    file_name=f"MAGKEIN_{period_str}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="mg_dl"
-                )
+            period_str = f"{mg_date_from.strftime('%d.%m')}-{mg_date_to.strftime('%d.%m.%Y')}"
+            st.download_button(
+                f"⬇️ Excel — MAGKEIN ({period_str})",
+                data=buf_mg.getvalue(),
+                file_name=f"MAGKEIN_{period_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="mg_dl"
+            )
