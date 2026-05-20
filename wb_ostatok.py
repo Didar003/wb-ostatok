@@ -10,8 +10,16 @@ import os
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
 
-FBO_FILE = "/tmp/wb_fbo_data.json"
-SEBEST_FILE = "/tmp/wb_sebest_data.json"
+# Тұрақты деректер қоймасы — app директориясында
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wb_data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+FBO_FILE    = os.path.join(DATA_DIR, "fbo_data.json")
+SEBEST_FILE = os.path.join(DATA_DIR, "sebest_data.json")
+
+def _tmp(name):
+    """Уақытша файлдар (автожауап, жалоб) — сессия ішінде ғана"""
+    return os.path.join(DATA_DIR, name)
 
 def load_json(path):
     try:
@@ -24,8 +32,9 @@ def load_json(path):
 
 def save_json(path, data):
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Сақталмады: {e}")
 
@@ -544,7 +553,7 @@ def show_feedback_tab(store):
 
     feedbacks = data.get("feedbacks", [])
     questions = data.get("questions", [])
-    auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
+    auto_replied = load_json(_tmp(f"auto_replied_{idx}.json"))
 
     # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
@@ -598,7 +607,7 @@ def show_feedback_tab(store):
                     reply_text = auto_replied[fb_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
                         del auto_replied[fb_id]
-                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                        save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
                         st.warning("⚠️ Қате жауап тазаланды")
                     else:
                         st.success("✅ Опубликован")
@@ -617,7 +626,7 @@ def show_feedback_tab(store):
                                 ok = send_feedback_reply(fb_key, fb_id, edited)
                                 if ok:
                                     auto_replied[fb_id] = edited
-                                    save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
                                     del st.session_state[preview_key_fb]
                                     st.rerun()
                                 else:
@@ -663,7 +672,7 @@ def show_feedback_tab(store):
                     reply_text = auto_replied[q_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text:
                         del auto_replied[q_id]
-                        save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                        save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
                         st.warning("⚠️ Қате жауап тазаланды")
                     else:
                         st.success("✅ Опубликован")
@@ -682,7 +691,7 @@ def show_feedback_tab(store):
                                 ok = send_question_reply(fb_key, q_id, edited)
                                 if ok:
                                     auto_replied[q_id] = edited
-                                    save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
+                                    save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
                                     del st.session_state[preview_key_q]
                                     st.rerun()
                                 else:
