@@ -29,9 +29,6 @@ def save_json(path, data):
     except Exception as e:
         st.warning(f"Сақталмады: {e}")
 
-# ──────────────────────────────────────────────
-# КІРУ
-# ──────────────────────────────────────────────
 def check_password():
     if st.session_state.get("role"):
         return True
@@ -63,9 +60,6 @@ def check_password():
 if not check_password():
     st.stop()
 
-# ──────────────────────────────────────────────
-# МАГАЗИН ТІЗІМІ
-# ──────────────────────────────────────────────
 def get_stores():
     names_str = st.secrets.get("STORE_NAMES", "")
     if not names_str:
@@ -87,9 +81,6 @@ def get_stores():
             })
     return stores
 
-# ──────────────────────────────────────────────
-# API ФУНКЦИЯЛАРЫ
-# ──────────────────────────────────────────────
 def days_ago_str(n):
     return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT00:00:00")
 
@@ -151,9 +142,6 @@ def parse_remains(data):
     return pd.DataFrame(rows)
 
 def fetch_report_detail(stats_key, date_from, date_to, store_name=""):
-    """reportDetailByPeriod — финансы отчеті"""
-    # v5 — жаңа отчёттар үшін (27 қарашадан бастап)
-    # v1 — ескі отчёттар үшін
     urls = [
         "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod",
         "https://statistics-api.wildberries.ru/api/v1/supplier/reportDetailByPeriod",
@@ -192,20 +180,19 @@ def fetch_report_detail(stats_key, date_from, date_to, store_name=""):
     return all_rows
 
 def parse_finance(rows):
-    """Финансы деректерін парсинг"""
     if not rows:
         return {}
     result = {
-        "for_pay": 0,        # К перечислению (продажа ppvz_for_pay)
-        "ads": 0,            # Удержания (реклама WB)
-        "storage": 0,        # Хранение
-        "penalty": 0,        # Штраф
-        "logistic": 0,       # Логистика (доставка)
-        "priemka": 0,        # Операции на приёмке
-        "vozvrat": 0,        # Возврат ppvz
-        "vozvrat_qty": 0,    # Возврат дана саны
-        "total_qty": 0,      # Жалпы сатылды
-        "by_article": {}     # Артикул бойынша
+        "for_pay": 0,
+        "ads": 0,
+        "storage": 0,
+        "penalty": 0,
+        "logistic": 0,
+        "priemka": 0,
+        "vozvrat": 0,
+        "vozvrat_qty": 0,
+        "total_qty": 0,
+        "by_article": {}
     }
 
     for row in rows:
@@ -227,20 +214,14 @@ def parse_finance(rows):
                     result["by_article"][article] = {"qty": 0, "for_pay": 0, "vozvrat": 0}
                 result["by_article"][article]["qty"] += qty
                 result["by_article"][article]["for_pay"] += ppvz
-
         elif oper_up == "ВОЗВРАТ":
             result["vozvrat"] += abs(ppvz)
             result["vozvrat_qty"] += qty
             if article and article in result["by_article"]:
                 result["by_article"][article]["vozvrat"] += abs(ppvz)
-
         elif oper_up == "ЛОГИСТИКА" or "ДОСТАВК" in oper_up:
-            # "Услуги по доставке товара покупателю"
             result["logistic"] += abs(delivery_rub)
-
         elif "ОБРАБОТКА" in oper_up:
-            # "Операции на приемке" — assembly_id емес, сандық өрістен аламыз
-            # Excel: "Операции на приемке" → API: "acceptance" немесе "assembly_id"
             priemka_val = (
                 abs(float(row.get("acceptance", 0) or 0)) or
                 abs(float(row.get("assembly_id", 0) or 0)) or
@@ -248,19 +229,13 @@ def parse_finance(rows):
                 abs(float(row.get("deduction", 0) or 0))
             )
             result["priemka"] += priemka_val
-
         elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
-
         elif "ШТРАФ" in oper_up:
             result["penalty"] += abs(penalty_val) + abs(deduct)
-
         elif "УДЕРЖАНИЕ" in oper_up:
-            # Реклама WB удержания
             result["ads"] += abs(deduct) + abs(ppvz)
 
-    # Егер логистика API-да жеке операция ретінде келмесе
-    # барлық жолдан delivery_rub жалпысын аламыз (резервтік)
     if result["logistic"] == 0:
         for row in rows:
             result["logistic"] += abs(float(row.get("delivery_rub", 0) or 0))
@@ -272,9 +247,6 @@ def status_label(q):
     if q <= 500:  return "Хорошо"
     return "Достаточно"
 
-# ──────────────────────────────────────────────
-# ОСТАТКИ ЖҮКТЕУ
-# ──────────────────────────────────────────────
 def load_store_data(store):
     idx = store["idx"]
     stats_key = store["stats_key"]
@@ -282,7 +254,6 @@ def load_store_data(store):
     name = store["name"]
     errors = []
 
-    # Остатки
     if analytics_key:
         try:
             with st.spinner(f"[{name}] Остатки және FBO жүктелуде..."):
@@ -310,7 +281,6 @@ def load_store_data(store):
 
     time.sleep(3)
 
-    # Продажи
     try:
         with st.spinner(f"[{name}] Продажи жүктелуде..."):
             sales_raw = wb_get_retry(
@@ -340,7 +310,6 @@ def load_store_data(store):
 
     time.sleep(3)
 
-    # Аналитика 30 күн
     sales30 = pd.DataFrame()
     try:
         with st.spinner(f"[{name}] Аналитика жүктелуде..."):
@@ -366,7 +335,6 @@ def load_store_data(store):
     except Exception as e:
         errors.append(f"Аналитика: {e}")
 
-    # Итог
     df = pd.DataFrame()
     if not agg.empty:
         df = agg.merge(daily, on="supplierArticle", how="left")
@@ -386,13 +354,9 @@ def load_store_data(store):
     return df, sales30, errors
 
 
-# ──────────────────────────────────────────────
-# ОТЗЫВЫ & ВОПРОСЫ ФУНКЦИЯЛАРЫ
-# ──────────────────────────────────────────────
 FEEDBACK_BASE = "https://feedbacks-api.wildberries.ru"
 
 def fetch_feedbacks(fb_key, is_answered=False, take=20):
-    """Жауапсыз/жауапты отзывтар"""
     try:
         r = requests.get(
             f"{FEEDBACK_BASE}/api/v1/feedbacks",
@@ -411,7 +375,6 @@ def fetch_feedbacks(fb_key, is_answered=False, take=20):
         return []
 
 def fetch_questions(fb_key, is_answered=False, take=20):
-    """Жауапсыз/жауапты сұрақтар"""
     try:
         r = requests.get(
             f"{FEEDBACK_BASE}/api/v1/questions",
@@ -429,7 +392,6 @@ def fetch_questions(fb_key, is_answered=False, take=20):
         return []
 
 def send_feedback_reply(fb_key, feedback_id, text):
-    """Отзывқа жауап жіберу"""
     try:
         r = requests.patch(
             f"{FEEDBACK_BASE}/api/v1/feedbacks/answer",
@@ -445,7 +407,6 @@ def send_feedback_reply(fb_key, feedback_id, text):
         return False
 
 def send_question_reply(fb_key, question_id, text):
-    """Сұраққа жауап жіберу"""
     try:
         r = requests.patch(
             f"{FEEDBACK_BASE}/api/v1/questions",
@@ -461,7 +422,6 @@ def send_question_reply(fb_key, question_id, text):
         return False
 
 def send_feedback_complaint(fb_key, feedback_id):
-    """Отзывқа жалоб жіберу"""
     try:
         r = requests.post(
             f"{FEEDBACK_BASE}/api/v1/feedbacks/report",
@@ -474,7 +434,7 @@ def send_feedback_complaint(fb_key, feedback_id):
         return False
 
 def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables="", order_status=""):
-    """Claude API арқылы ИИ жауап жасау"""
+    """Claude API арқылы ИИ жауап жасау — 529 retry қосылған"""
     try:
         if reply_type == "feedback":
             is_rejected = order_status in ("rejected", "cancelled", "canceled")
@@ -520,23 +480,31 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
         anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "")
         if not anthropic_key:
             return "⚠️ ANTHROPIC_API_KEY Secrets-ке қосылмаған"
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": anthropic_key,
-                "anthropic-version": "2023-06-01"
-            },
-            json={
-                "model": "claude-sonnet-4-5",
-                "max_tokens": 300,
-                "system": system,
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            timeout=30
-        )
-        r.raise_for_status()
-        return r.json()["content"][0]["text"].strip()
+
+        # 529 қатесі болса 3 рет қайталайды
+        for attempt in range(3):
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01"
+                },
+                json={
+                    "model": "claude-sonnet-4-5",
+                    "max_tokens": 300,
+                    "system": system,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=30
+            )
+            if r.status_code == 529:
+                time.sleep(10)
+                continue
+            r.raise_for_status()
+            return r.json()["content"][0]["text"].strip()
+        return "⚠️ Anthropic сервері бос емес, кейінірек қайталаңыз"
+
     except Exception as e:
         return f"ИИ қатесі: {e}"
 
@@ -554,13 +522,11 @@ def show_feedback_tab(store):
         st.warning("⚠️ Secrets-ке STORE_{n}_FEEDBACK токенін қосыңыз")
         return
 
-    # Авто баптаулар
     auto_key = f"fb_auto_{idx}"
     if auto_key not in st.session_state:
         st.session_state[auto_key] = {"auto_reply": True, "auto_complaint": True}
     auto_cfg = st.session_state[auto_key]
 
-    # Деректерді жүктеу
     load_key = f"fb_data_{idx}"
     if load_key not in st.session_state:
         st.session_state[load_key] = None
@@ -578,7 +544,6 @@ def show_feedback_tab(store):
                     "complaints": complaints_data
                 }
 
-                # Авто жалоб — 1-3 жұлдыз
                 if auto_cfg["auto_complaint"]:
                     for fb in feedbacks:
                         rating = fb.get("productValuation") or fb.get("rating") or 0
@@ -590,7 +555,6 @@ def show_feedback_tab(store):
                                 complaints_data[fb_id] = "sent"
                                 save_json(f"/tmp/wb_complaints_{idx}.json", complaints_data)
 
-                # Авто жауап — 4-5 жұлдыз
                 if auto_cfg["auto_reply"]:
                     auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
                     for fb in feedbacks:
@@ -609,7 +573,6 @@ def show_feedback_tab(store):
                             if ok:
                                 auto_replied[fb_id] = reply
                                 save_json(f"/tmp/wb_auto_replied_{idx}.json", auto_replied)
-                    # Сұрақтарға авто жауап жоқ — тек қолмен
 
                 st.rerun()
 
@@ -623,9 +586,6 @@ def show_feedback_tab(store):
         if new_val2 != auto_cfg["auto_complaint"]:
             st.session_state[auto_key]["auto_complaint"] = new_val2
 
-    # Метрикалар қатарына "Авто вопросы" ескертуі
-
-
     data = st.session_state[load_key]
     if data is None:
         st.info("👆 **«Жүктеу»** батырмасын басыңыз")
@@ -636,7 +596,6 @@ def show_feedback_tab(store):
     complaints = data.get("complaints", {})
     auto_replied = load_json(f"/tmp/wb_auto_replied_{idx}.json")
 
-    # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("⭐ Жаңа отзыв", len(feedbacks))
@@ -647,14 +606,12 @@ def show_feedback_tab(store):
 
     st.divider()
 
-    # ── 3 ТАБ ──
     t1, t2, t3 = st.tabs([
         f"⭐ Отзывы ({len(feedbacks)})",
         f"❓ Авто вопросы ({len(questions)})",
         f"🚨 Жалобы ({len(complaints)})"
     ])
 
-    # ОТЗЫВЫ
     with t1:
         if not feedbacks:
             st.success("✅ Жауапсыз отзыв жоқ!")
@@ -688,7 +645,6 @@ def show_feedback_tab(store):
                         else:
                             st.caption("🔴 жалоб күтілуде")
 
-                # Жіберілген жауап
                 if fb_id in auto_replied:
                     reply_text = auto_replied[fb_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
@@ -700,7 +656,6 @@ def show_feedback_tab(store):
                         with st.expander("Жауапты көру"):
                             st.caption(reply_text)
 
-                # Preview режимі
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
                     edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
@@ -722,7 +677,6 @@ def show_feedback_tab(store):
                             del st.session_state[preview_key_fb]
                             st.rerun()
 
-                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 ИИ жауап жасау", key=f"ai_fb_{fb_id}", use_container_width=True):
                         with st.spinner("ИИ жазып жатыр..."):
@@ -732,7 +686,6 @@ def show_feedback_tab(store):
 
                 st.divider()
 
-    # ВОПРОСЫ
     with t2:
         if not questions:
             st.success("✅ Жауапсыз сұрақ жоқ!")
@@ -753,7 +706,6 @@ def show_feedback_tab(store):
                 with col2:
                     pass
 
-                # Жіберілген жауап
                 if q_id in auto_replied:
                     reply_text = auto_replied[q_id]
                     if "ИИ қатесі" in reply_text or "Error" in reply_text or "401" in reply_text:
@@ -765,7 +717,6 @@ def show_feedback_tab(store):
                         with st.expander("Жауапты көру"):
                             st.caption(reply_text)
 
-                # Preview режимі
                 elif preview_key_q in st.session_state:
                     preview_text = st.session_state[preview_key_q]
                     edited = st.text_area("✏️ ИИ жауабы — өзгертуге болады:", value=preview_text, key=f"edit_q_{q_id}", height=100)
@@ -787,7 +738,6 @@ def show_feedback_tab(store):
                             del st.session_state[preview_key_q]
                             st.rerun()
 
-                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 ИИ жауап жасау", key=f"ai_q_{q_id}", use_container_width=True):
                         with st.spinner("ИИ жазып жатыр..."):
@@ -797,7 +747,6 @@ def show_feedback_tab(store):
 
                 st.divider()
 
-    # ЖАЛОБЫ
     with t3:
         if not complaints:
             st.info("Жалоб жоқ")
@@ -805,9 +754,6 @@ def show_feedback_tab(store):
             for fb_id, status in complaints.items():
                 st.markdown(f"🚨 ID: `{fb_id[:8]}...` — **{status}**")
 
-# ──────────────────────────────────────────────
-# ФИНАНСЫ ТАБИ
-# ──────────────────────────────────────────────
 def show_finance_tab(store, df):
     idx = store["idx"]
     stats_key = store["stats_key"]
@@ -815,9 +761,8 @@ def show_finance_tab(store, df):
     name = store["name"]
     role = st.session_state.get("role", "manager")
 
-    st.markdown("#### 💰 Финансы отчет")
+    st.markdown("#### 💰 Финансовый отчет")
 
-    # Период таңдау
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         date_from = st.date_input("Басталу күні", value=date.today() - timedelta(days=7),
@@ -832,7 +777,6 @@ def show_finance_tab(store, df):
     fin_key = f"finance_{idx}"
     use_key = finance_key if finance_key else stats_key
 
-    # Период өзгерсе кэшті тазала
     period_key = f"fin_period_{idx}"
     current_period = f"{date_from}_{date_to}"
     if st.session_state.get(period_key) != current_period:
@@ -861,39 +805,34 @@ def show_finance_tab(store, df):
 
     fin = st.session_state[fin_key]
 
-    # Қолмен енгізу мәндерін сақтау
     man_key = f"fin_manual_{idx}"
     if man_key not in st.session_state:
         st.session_state[man_key] = {"logistic": 0, "samovykup": 0, "reklama_napay": 0}
     man = st.session_state[man_key]
 
-    # Есептеу
     for_pay = fin.get("for_pay", 0)
     ads = fin.get("ads", 0)
     storage = fin.get("storage", 0)
     penalty = fin.get("penalty", 0)
-    logistic_auto = fin.get("logistic", 0)  # WB API-дан автоматты
+    logistic_auto = fin.get("logistic", 0)
     vozvrat = fin.get("vozvrat", 0)
     vozvrat_qty = fin.get("vozvrat_qty", 0)
     total_qty = fin.get("total_qty", 0)
     vozvrat_shygyn = vozvrat * 2
 
-    logistic = man["logistic"]  # қолмен — складқа дейінгі жеткізу
+    logistic = man["logistic"]
     samovykup = man["samovykup"]
     reklama_napay = man["reklama_napay"]
 
-    # Себестоимость
     seb_key = f"sebest_{idx}"
     all_seb = load_json(SEBEST_FILE)
     seb_data = all_seb.get(str(idx), {})
 
-    # Тауарлар тізімі
     articles = []
     if not df.empty:
         articles = df["supplierArticle"].tolist()
     by_article = fin.get("by_article", {})
 
-    # Жалпы себестоимость
     tot_seb = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
     tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
     upakovka = tot_qty_sold * 100
@@ -911,7 +850,6 @@ def show_finance_tab(store, df):
     def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
     def fmtN(n): return f"{round(n):,}".replace(",", " ")
 
-    # МЕТРИКАЛАР
     c1, c2, c3 = st.columns(3)
     c1.metric("К перечислению", fmt(for_pay))
     c2.metric("На пэй", fmt(napay))
@@ -928,7 +866,6 @@ def show_finance_tab(store, df):
             ("авто", "К перечислению", fmt(for_pay), "blue"),
             ("авто", "Удержания (реклама WB)", f"- {fmt(ads)}", "red"),
             ("авто", "Логистика WB (жеткізу)", f"- {fmt(logistic_auto)}", "red"),
-
             ("авто", "Хранение", f"- {fmt(storage)}", "red"),
             ("авто", "Операции на приёмке", f"- {fmt(priemka)}", "red"),
             ("авто", "Штраф", f"- {fmt(penalty)}", "red"),
@@ -957,7 +894,6 @@ def show_finance_tab(store, df):
         r1.caption(f"[авто] Упаковка ({fmtN(tot_qty_sold)} × 100₸)")
         r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(upakovka)}</p>", unsafe_allow_html=True)
 
-        # Қолмен
         if role == "manager":
             new_log = st.number_input("[қол] Логистика до склада (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
@@ -1000,7 +936,6 @@ def show_finance_tab(store, df):
         st.markdown(f"- Штраф: :red[{fmt(penalty)}]")
         st.markdown(f"- Упаковка жалпы: :red[{fmt(upakovka)}]")
 
-    # Excel жүктеу батырмасы
     st.divider()
     if by_article:
         excel_rows = []
@@ -1009,7 +944,7 @@ def show_finance_tab(store, df):
             wb_a = data.get("for_pay", 0)
             vozvrat_a = data.get("vozvrat", 0)
             sebest_a = seb_data.get(art, 0)
-            reklama_a = ads_by_art.get(art, 0) if "ads_by_art" in dir() else 0
+            reklama_a = 0
             share = wb_a / for_pay if for_pay > 0 else 0
             napay_a = wb_a - (storage*share) - (priemka*share) - (vozvrat_a*2)
             ndv_a = napay_a * ndv_rate
@@ -1030,7 +965,6 @@ def show_finance_tab(store, df):
                 "Рентабельность (%)": round(pct_a, 1),
             })
 
-        # Жалпы жол
         summary = {
             "Артикул": "ЖАЛПЫ",
             "Сатылды (шт)": total_qty,
@@ -1066,32 +1000,31 @@ def show_finance_tab(store, df):
                     ws.cell(r, c).border = thin_border()
 
         row = 1
-        # ── ЖАЛПЫ ОТЧЕТ ──
         ws.cell(row, 1, "ЖАЛПЫ ОТЧЕТ").font = BOLD12
         row += 1
         general_data = [
-            ("К перечислению",      round(for_pay),         None,        False),
-            ("Удержания (реклама)", -round(ads),             None,        False),
-            ("Логистика WB",        -round(logistic_auto),  None,        False),
-            ("Хранение",            -round(storage),        None,        False),
-            ("Операции на приёмке", -round(priemka),        None,        False),
-            ("Штраф",               -round(penalty),        None,        False),
-            ("Возврат × 2",         -round(vozvrat_shygyn), None,        False),
-            ("На пэй",              round(napay),           BLUE_FILL,   True),
-            ("НДС наше",            -round(ndv_nashe),      None,        False),
-            ("Себестоимость",       -round(tot_seb),        None,        False),
-            ("Упаковка",            -round(upakovka),       None,        False),
-            ("Логистика до склада", -round(logistic),       None,        False),
-            ("Самовыкуп",           -round(samovykup),      None,        False),
-            ("Реклама на пэй",      -round(reklama_napay),  None,        False),
-            ("До ИПН",              round(do_ipn),          None,        False),
-            ("ИПН 10%",             -round(ipn),            None,        False),
-            ("ТАЗА ПАЙДА",          round(profit),          "profit",    True),
-            ("Рентабельность",      f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%", "profit", False),
+            ("авто", "К перечислению",      round(for_pay),         None,        False),
+            ("авто", "Удержания (реклама)", -round(ads),             None,        False),
+            ("авто", "Логистика WB",        -round(logistic_auto),  None,        False),
+            ("авто", "Хранение",            -round(storage),        None,        False),
+            ("авто", "Операции на приёмке", -round(priemka),        None,        False),
+            ("авто", "Штраф",               -round(penalty),        None,        False),
+            ("авто", "Возврат × 2",         -round(vozvrat_shygyn), None,        False),
+            ("авто", "На пэй",              round(napay),           BLUE_FILL,   True),
+            ("авто", "НДС наше",            -round(ndv_nashe),      None,        False),
+            ("авто", "Себестоимость",       -round(tot_seb),        None,        False),
+            ("авто", "Упаковка",            -round(upakovka),       None,        False),
+            ("қол",  "Логистика до склада", -round(logistic),       None,        False),
+            ("қол",  "Самовыкуп",           -round(samovykup),      None,        False),
+            ("қол",  "Реклама на пэй",      -round(reklama_napay),  None,        False),
+            ("авто", "До ИПН",              round(do_ipn),          None,        False),
+            ("авто", "ИПН 10%",             -round(ipn),            None,        False),
+            ("авто", "ТАЗА ПАЙДА",          round(profit),          "profit",    True),
+            ("авто", "Рентабельность",      f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%", "profit", False),
         ]
         gen_start = row
-        for label, val, fill, bold in general_data:
-            c1 = ws.cell(row, 1, label)
+        for tag, label, val, fill, bold in general_data:
+            c1 = ws.cell(row, 1, f"[{tag}] {label}")
             c2 = ws.cell(row, 2, val)
             actual_fill = (GREEN_FILL if profit >= 0 else RED_FILL) if fill == "profit" else fill
             if actual_fill:
@@ -1104,7 +1037,6 @@ def show_finance_tab(store, df):
         apply_border(ws, gen_start, row-1, 1, 2)
 
         row += 1
-        # ── ТАУАР БОЙЫНША ──
         ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = BOLD12
         row += 1
         prod_headers = ["Артикул", "Сатылды (шт)", "WB түскен (₸)", "Себест/шт (₸)", "Реклама (₸)", "Таза пайда (₸)", "Рентабельность (%)"]
@@ -1132,7 +1064,6 @@ def show_finance_tab(store, df):
         apply_border(ws, prod_hdr_row, row-1, 1, 7)
 
         row += 1
-        # ── СЕБЕСТОИМОСТЬ ──
         ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = BOLD12
         row += 1
         seb_headers = ["Артикул", "Сатылды (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Жалпы (₸)"]
@@ -1170,8 +1101,6 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    # ТАУАР БОЙЫНША
-    # Тауар бойынша реклама деректерін оқу/сақтау
     ads_key = f"ads_by_art_{idx}"
     if ads_key not in st.session_state:
         st.session_state[ads_key] = {}
@@ -1187,7 +1116,6 @@ def show_finance_tab(store, df):
                 sebest_a = seb_data.get(art, 0)
                 reklama_a = ads_by_art.get(art, 0)
                 share = wb_a / for_pay if for_pay > 0 else 0
-                # Тауар бойынша: удержания бөлінбейді — тек қолмен жазылған реклама
                 napay_a = wb_a - (storage*share) - (priemka*share) - (vozvrat_a*2)
                 ndv_a = napay_a * ndv_rate
                 ndvpr_a = (sebest_a * qty_a) * ndv_rate
@@ -1223,7 +1151,6 @@ def show_finance_tab(store, df):
                     "%": st.column_config.NumberColumn(format="%.1f%%"),
                 })
 
-            # Реклама қолмен енгізу
             if role == "manager":
                 st.divider()
                 st.caption("✏️ Реклама — тауар бойынша қолмен енгізіңіз")
@@ -1246,7 +1173,6 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    # СЕБЕСТОИМОСТЬ КЕСТЕСІ — тек менеджер өзгерте алады
     with st.expander("🗂️ Себестоимость — тауар бойынша", expanded=False):
         if by_article:
             seb_rows = []
@@ -1274,7 +1200,6 @@ def show_finance_tab(store, df):
                         "Жалпы (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
                     }
                 )
-                # Себест өзгерсе сақтаймыз
                 new_seb = dict(zip(edited_seb["Артикул"], edited_seb["Себест/шт (₸)"]))
                 if new_seb != seb_data:
                     all_seb[str(idx)] = new_seb
@@ -1283,9 +1208,6 @@ def show_finance_tab(store, df):
             else:
                 st.dataframe(seb_df, use_container_width=True, height=400)
 
-# ──────────────────────────────────────────────
-# БІР МАГАЗИН КӨРСЕТУ
-# ──────────────────────────────────────────────
 def show_store(store, df, sales30, filter_status, search):
     idx = store["idx"]
     role = st.session_state.get("role", "manager")
@@ -1298,7 +1220,6 @@ def show_store(store, df, sales30, filter_status, search):
         "📦 Остатки", "📊 Аналитика — 30 күн", "💰 Финансы", "💬 Отзывы & Вопросы"
     ])
 
-    # ── АНАЛИТИКА ──
     with tab_analytic:
         if sales30 is None or sales30.empty:
             st.info("Деректер жоқ")
@@ -1324,15 +1245,12 @@ def show_store(store, df, sales30, filter_status, search):
             st.dataframe(disp.sort_values("Дата", ascending=False).reset_index(drop=True),
                          use_container_width=True, height=400)
 
-    # ── ФИНАНСЫ ──
     with tab_finance:
         show_finance_tab(store, df)
 
-    # ── ОТЗЫВЫ & ВОПРОСЫ ──
     with tab_feedback:
         show_feedback_tab(store)
 
-    # ── ОСТАТКИ ──
     with tab_ostatok:
         dff = df.copy()
         if filter_status == "Ноль":
@@ -1394,7 +1312,6 @@ def show_store(store, df, sales30, filter_status, search):
 
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            # Dummy sheet жасаймыз — кейін аламыз
             pd.DataFrame().to_excel(writer, sheet_name="_tmp", index=False)
             result.to_excel(writer, index=False, sheet_name="Остатки WB")
         st.download_button(f"⬇️ Excel — {store['name']}", data=buf.getvalue(),
@@ -1419,9 +1336,7 @@ def show_store(store, df, sales30, filter_status, search):
                 save_json(FBO_FILE, all_fbo)
                 st.rerun()
 
-# ──────────────────────────────────────────────
-# SIDEBAR
-# ──────────────────────────────────────────────
+# ── SIDEBAR ──
 stores = get_stores()
 _role = st.session_state.get("role", "manager")
 _store_access = st.session_state.get("store_access", None)
@@ -1454,9 +1369,7 @@ with st.sidebar:
         st.session_state.store_access = None
         st.rerun()
 
-# ──────────────────────────────────────────────
-# НЕГІЗГІ
-# ──────────────────────────────────────────────
+# ── НЕГІЗГІ ──
 st.title("📦 Wildberries отчёт")
 st.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
