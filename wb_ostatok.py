@@ -797,12 +797,12 @@ def fetch_acceptance_report(analytics_key, date_from, date_to):
     base = "https://seller-analytics-api.wildberries.ru"
     headers = {"Authorization": analytics_key}
 
-    # 1) Тапсырма жасау
+    # 1) Тапсырма жасау — GET + query params
     for attempt in range(3):
-        r = requests.post(
-            f"{base}/api/v1/acceptance_report/tasks",
+        r = requests.get(
+            f"{base}/api/v1/acceptance_report",
             headers=headers,
-            json={"dateFrom": date_from, "dateTo": date_to},
+            params={"dateFrom": date_from, "dateTo": date_to},
             timeout=30
         )
         if r.status_code == 429:
