@@ -792,12 +792,71 @@ def show_feedback_tab(store):
 #  ЖАҢА ФУНКЦИЯ — ПРИЁМКА
 # ══════════════════════════════════════════════════════════════
 
+def fetch_acceptance_report(analytics_key, date_from, date_to):
+    """WB acceptance_report — task-based, Analytics токені керек"""
+    base = "https://seller-analytics-api.wildberries.ru"
+    headers = {"Authorization": analytics_key}
+
+    # 1) Тапсырма жасау
+    for attempt in range(3):
+        r = requests.post(
+            f"{base}/api/v1/acceptance_report/tasks",
+            headers=headers,
+            json={"dateFrom": date_from, "dateTo": date_to},
+            timeout=30
+        )
+        if r.status_code == 429:
+            time.sleep(65)
+            continue
+        r.raise_for_status()
+        break
+    else:
+        raise Exception("Лимит запросов (429)")
+
+    task_id = r.json()["data"]["taskId"]
+
+    # 2) Статусты күту
+    for _ in range(30):
+        time.sleep(5)
+        r2 = requests.get(
+            f"{base}/api/v1/acceptance_report/tasks/{task_id}/status",
+            headers=headers, timeout=30
+        )
+        if r2.status_code == 429:
+            time.sleep(65)
+            continue
+        r2.raise_for_status()
+        status = r2.json()["data"]["status"]
+        if status == "done":
+            break
+        elif status in ["failed", "error"]:
+            raise Exception(f"Тапсырма қатесі: {status}")
+
+    # 3) Деректерді жүктеу
+    for attempt in range(3):
+        r3 = requests.get(
+            f"{base}/api/v1/acceptance_report/tasks/{task_id}/download",
+            headers=headers, timeout=60
+        )
+        if r3.status_code == 429:
+            time.sleep(65)
+            continue
+        r3.raise_for_status()
+        return r3.json()
+    raise Exception("Деректерді жүктеу мүмкін болмады")
+
+
 def show_priemka_tab(store):
     idx = store["idx"]
-    stats_key = store["stats_key"]
+    analytics_key = store.get("analytics_key", "")
     name = store["name"]
 
     st.markdown("#### 📥 Приёмка — принятые товары")
+
+    # Analytics токені жоқ болса — хабарлама
+    if not analytics_key:
+        st.warning("⚠️ Приёмка үшін **Analytics токені** керек. Secrets-ке `STORE_{n}_ANALYTICS` қосыңыз.")
+        return
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -830,25 +889,13 @@ def show_priemka_tab(store):
         st.session_state[pr_period_key] = current_period
 
     if load_pr:
-        with st.spinner(f"[{name}] Загрузка поставок..."):
+        with st.spinner(f"[{name}] Приёмка есебі жасалуда (~30 сек)..."):
             try:
-                date_from_str = pr_from.strftime("%Y-%m-%d")
-                rows = []
-                for attempt in range(3):
-                    r = requests.get(
-                        "https://statistics-api.wildberries.ru/api/v1/supplier/incomes",
-                        headers={"Authorization": stats_key},
-                        params={"dateFrom": date_from_str},
-                        timeout=60
-                    )
-                    if r.status_code == 429:
-                        st.info("⏳ WB API лимит — 65 сек...")
-                        time.sleep(65)
-                        continue
-                    r.raise_for_status()
-                    rows = r.json()
-                    break
-
+                rows = fetch_acceptance_report(
+                    analytics_key,
+                    pr_from.strftime("%Y-%m-%d"),
+                    pr_to.strftime("%Y-%m-%d")
+                )
                 st.session_state[pr_key] = rows
                 st.success(f"✅ {len(rows)} жазба жүктелді!")
             except Exception as e:
@@ -865,109 +912,88 @@ def show_priemka_tab(store):
 
     df_pr = pd.DataFrame(rows)
 
-    for col in ["date", "lastChangeDate", "dateClose"]:
-        if col in df_pr.columns:
-            df_pr[col] = pd.to_datetime(df_pr[col], errors="coerce")
+    # Баған атауларын бейімдеу (API: count, nmID, giCreateDate, shkCreateDate, subjectName, incomeId, total)
+    col_map = {
+        "count":          "Принято (шт)",
+        "nmID":           "nmId",
+        "giCreateDate":   "Дата поставки",
+        "shkCreateDate":  "Дата приёмки",
+        "subjectName":    "Категория",
+        "incomeId":       "incomeId",
+        "total":          "Сумма приёмки (₸)",
+    }
+    df_pr = df_pr.rename(columns={k: v for k, v in col_map.items() if k in df_pr.columns})
 
-    if "status" in df_pr.columns:
-        df_pr = df_pr[df_pr["status"] == "Принято"]
+    for dcol in ["Дата поставки", "Дата приёмки"]:
+        if dcol in df_pr.columns:
+            df_pr[dcol] = pd.to_datetime(df_pr[dcol], errors="coerce")
 
-    if "dateClose" in df_pr.columns:
-        df_pr = df_pr[
-            (df_pr["dateClose"].dt.date >= pr_from) &
-            (df_pr["dateClose"].dt.date <= pr_to)
-        ]
-
-    if df_pr.empty:
-        st.warning(f"Таңдалған кезеңде қабылданған товар жоқ ({pr_from} — {pr_to})")
-        return
-
-    total_qty    = int(df_pr["quantity"].sum()) if "quantity" in df_pr.columns else 0
-    total_arts   = df_pr["supplierArticle"].nunique() if "supplierArticle" in df_pr.columns else 0
+    # ── МЕТРИКАЛАР ──
+    total_qty    = int(df_pr["Принято (шт)"].sum()) if "Принято (шт)" in df_pr.columns else 0
     total_supply = df_pr["incomeId"].nunique() if "incomeId" in df_pr.columns else 0
+    total_sum    = df_pr["Сумма приёмки (₸)"].sum() if "Сумма приёмки (₸)" in df_pr.columns else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("📦 Принято (шт)", f"{total_qty:,}".replace(",", " "))
-    c2.metric("🏷️ Артикулов",   total_arts)
-    c3.metric("🚚 Поставок",     total_supply)
+    c1.metric("📦 Принято (шт)",    f"{total_qty:,}".replace(",", " "))
+    c2.metric("🚚 Поставок",         total_supply)
+    c3.metric("💰 Сумма приёмки",   f"{round(total_sum):,} ₸".replace(",", " "))
 
     st.divider()
 
-    st.markdown("#### 📊 По артикулам")
+    # ── КАТЕГОРИЯ БОЙЫНША КЕСТЕ ──
+    st.markdown("#### 📊 По категориям")
+    grp_cols = ["Категория"] if "Категория" in df_pr.columns else []
 
-    grp_cols = ["supplierArticle"]
-    if "warehouseName" in df_pr.columns:
-        grp_cols.append("warehouseName")
-
-    agg_df = (
-        df_pr
-        .groupby(grp_cols)
-        .agg(
-            qty=("quantity", "sum"),
-            поставок=("incomeId", "nunique"),
-            последняя=("dateClose", "max"),
+    if grp_cols:
+        agg_cat = (
+            df_pr.groupby("Категория")
+            .agg(qty=("Принято (шт)", "sum"), сумма=("Сумма приёмки (₸)", "sum"))
+            .reset_index()
+            .sort_values("qty", ascending=False)
+            .reset_index(drop=True)
         )
-        .reset_index()
-        .sort_values("qty", ascending=False)
-        .reset_index(drop=True)
-    )
-
-    agg_df["последняя"] = agg_df["последняя"].dt.strftime("%d.%m.%Y")
-    agg_df = agg_df.rename(columns={
-        "supplierArticle": "Артикул",
-        "warehouseName":   "Склад",
-        "qty":             "Принято (шт)",
-        "поставок":        "Поставок",
-        "последняя":       "Последняя дата",
-    })
-
-    def style_qty(val):
-        if not isinstance(val, (int, float)):
-            return ""
-        if val == 0:
-            return "color:#A32D2D"
-        if val >= 100:
-            return "color:#3B6D11;font-weight:bold"
-        return ""
-
-    styled_agg = agg_df.style.map(style_qty, subset=["Принято (шт)"])
-    st.dataframe(
-        styled_agg,
-        use_container_width=True,
-        height=420,
-        column_config={
-            "Принято (шт)": st.column_config.NumberColumn(format="%d шт"),
-            "Поставок":     st.column_config.NumberColumn(format="%d"),
-        }
-    )
-    st.caption(f"Жалпы: {len(agg_df)} артикул позиция")
+        agg_cat.columns = ["Категория", "Принято (шт)", "Сумма (₸)"]
+        st.dataframe(agg_cat, use_container_width=True, height=300,
+            column_config={
+                "Принято (шт)": st.column_config.NumberColumn(format="%d шт"),
+                "Сумма (₸)":    st.column_config.NumberColumn(format="%d ₸"),
+            })
 
     st.divider()
 
-    if "dateClose" in df_pr.columns:
+    # ── КҮН БОЙЫНША ДИАГРАММА ──
+    date_col = "Дата приёмки" if "Дата приёмки" in df_pr.columns else None
+    if date_col:
         st.markdown("#### 📈 Приёмка по дням")
         daily_pr = (
-            df_pr
-            .groupby(df_pr["dateClose"].dt.date)["quantity"]
-            .sum()
-            .reset_index()
+            df_pr.groupby(df_pr[date_col].dt.date)["Принято (шт)"]
+            .sum().reset_index()
         )
         daily_pr.columns = ["Дата", "Принято (шт)"]
-        daily_pr = daily_pr.sort_values("Дата")
         st.bar_chart(daily_pr.set_index("Дата"), height=260)
+        st.divider()
 
-    st.divider()
+    # ── ТОЛЫҚ КЕСТЕ ──
+    with st.expander("📋 Барлық жолдар", expanded=False):
+        show_cols = [c for c in ["incomeId", "Категория", "Принято (шт)",
+                                  "Дата поставки", "Дата приёмки", "Сумма приёмки (₸)", "nmId"]
+                     if c in df_pr.columns]
+        disp = df_pr[show_cols].copy()
+        for dcol in ["Дата поставки", "Дата приёмки"]:
+            if dcol in disp.columns:
+                disp[dcol] = disp[dcol].dt.strftime("%d.%m.%Y")
+        st.dataframe(disp, use_container_width=True, height=400)
 
+    # ── EXCEL ──
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        agg_df.to_excel(writer, index=False, sheet_name="Приёмка по артикулам")
-        raw_cols = [c for c in ["incomeId", "supplierArticle", "quantity",
-                                 "dateClose", "warehouseName", "status", "nmId"]
-                    if c in df_pr.columns]
-        raw_out = df_pr[raw_cols].copy()
-        if "dateClose" in raw_out.columns:
-            raw_out["dateClose"] = raw_out["dateClose"].dt.strftime("%d.%m.%Y")
-        raw_out.to_excel(writer, index=False, sheet_name="Все строки")
+        if grp_cols:
+            agg_cat.to_excel(writer, index=False, sheet_name="По категориям")
+        disp_exp = df_pr.copy()
+        for dcol in ["Дата поставки", "Дата приёмки"]:
+            if dcol in disp_exp.columns:
+                disp_exp[dcol] = disp_exp[dcol].dt.strftime("%d.%m.%Y")
+        disp_exp.to_excel(writer, index=False, sheet_name="Все строки")
 
     period_str = f"{pr_from.strftime('%d.%m')}-{pr_to.strftime('%d.%m.%Y')}"
     st.download_button(
