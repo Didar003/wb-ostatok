@@ -12,7 +12,6 @@ import base64
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
 
-# Тұрақты деректер қоймасы
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wb_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -22,7 +21,6 @@ SEBEST_FILE = os.path.join(DATA_DIR, "sebest_data.json")
 def _tmp(name):
     return os.path.join(DATA_DIR, name)
 
-# ── GITHUB АВТОСАҚТАУ ──────────────────────────────────────────
 def _gh_headers():
     token = st.secrets.get("GITHUB_TOKEN", "")
     if not token:
@@ -30,13 +28,12 @@ def _gh_headers():
     return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
 def _gh_repo():
-    return st.secrets.get("GITHUB_REPO", "")   # "Didar003/wb-ostatok"
+    return st.secrets.get("GITHUB_REPO", "")
 
 def _gh_branch():
     return st.secrets.get("GITHUB_BRANCH", "main")
 
 def github_load(filename):
-    """GitHub-тан файлды оқу"""
     headers = _gh_headers()
     repo    = _gh_repo()
     if not headers or not repo:
@@ -52,19 +49,16 @@ def github_load(filename):
     return None
 
 def github_save(filename, data):
-    """GitHub-қа файлды сақтау (автоcommit)"""
     headers = _gh_headers()
     repo    = _gh_repo()
     if not headers or not repo:
         return False
     try:
         url = f"https://api.github.com/repos/{repo}/contents/wb_data/{filename}"
-        # Бар файлдың SHA-сын алу
         sha = None
         r = requests.get(url, headers=headers, params={"ref": _gh_branch()}, timeout=10)
         if r.status_code == 200:
             sha = r.json().get("sha")
-        # Жаңа мазмұн
         content_b64 = base64.b64encode(
             json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         ).decode("utf-8")
@@ -81,15 +75,10 @@ def github_save(filename, data):
         return False
 
 def load_json(path):
-    """Оқу: алдымен сессия кэші → локал файл → GitHub"""
     filename = os.path.basename(path)
     cache_key = f"_json_cache_{filename}"
-
-    # Сессия кэшінен оқу (ең жылдам)
     if cache_key in st.session_state:
         return st.session_state[cache_key]
-
-    # Локал файлдан оқу
     data = None
     try:
         if os.path.exists(path):
@@ -97,8 +86,6 @@ def load_json(path):
                 data = json.load(f)
     except:
         pass
-
-    # Локал жоқ болса — GitHub-тан оқу
     if data is None and filename in ("sebest_data.json", "fbo_data.json"):
         gh_data = github_load(filename)
         if gh_data is not None:
@@ -109,28 +96,21 @@ def load_json(path):
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except:
                 pass
-
     if data is None:
         data = {}
-
-    # Кэшке сақтау
     st.session_state[cache_key] = data
     return data
 
 def save_json(path, data):
-    """Локалға + кэшке + GitHub-қа сақтау"""
     filename = os.path.basename(path)
-    # Кэшті жаңарту
     cache_key = f"_json_cache_{filename}"
     st.session_state[cache_key] = data
-    # Локалға жазу
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Не сохранено локально: {e}")
-    # GitHub-қа автосақтау
     if filename in ("sebest_data.json", "fbo_data.json"):
         github_save(filename, data)
 
@@ -202,7 +182,6 @@ def wb_get_retry(url, key, params={}, max_retries=3, store_name=""):
 
 def fetch_warehouse_remains(analytics_key):
     base = "https://seller-analytics-api.wildberries.ru"
-    # 429 retry — 3 попытки
     for attempt in range(3):
         r = requests.get(f"{base}/api/v1/warehouse_remains",
                          headers={"Authorization": analytics_key},
@@ -318,7 +297,6 @@ def parse_finance(rows):
         "total_qty": 0,
         "by_article": {}
     }
-
     for row in rows:
         oper = str(row.get("supplier_oper_name", "")).strip()
         oper_up = oper.upper()
@@ -558,7 +536,6 @@ def send_feedback_complaint(fb_key, feedback_id):
         return False
 
 def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables="", order_status=""):
-    """Claude API арқылы ИИ жауап жасау — 529 retry қосылған"""
     try:
         if reply_type == "feedback":
             is_rejected = order_status in ("rejected", "cancelled", "canceled")
@@ -606,7 +583,6 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
         if not anthropic_key:
             return "⚠️ ANTHROPIC_API_KEY Secrets-ке қосылмаған"
 
-        # 529 ошибка болса 3 рет қайталайды
         for attempt in range(3):
             r = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -647,7 +623,6 @@ def show_feedback_tab(store):
         st.warning("⚠️ Добавьте токен STORE_{n}_FEEDBACK в Secrets")
         return
 
-    # Деректерді жүктеу
     load_key = f"fb_data_{idx}"
     if load_key not in st.session_state:
         st.session_state[load_key] = None
@@ -671,7 +646,6 @@ def show_feedback_tab(store):
     questions = data.get("questions", [])
     auto_replied = load_json(_tmp(f"auto_replied_{idx}.json"))
 
-    # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("⭐ Новые отзывы", len(feedbacks))
@@ -681,13 +655,11 @@ def show_feedback_tab(store):
 
     st.divider()
 
-    # ── 2 ТАБ ──
     t1, t2 = st.tabs([
         f"⭐ Отзывы ({len(feedbacks)})",
         f"❓ Авто вопросы ({len(questions)})",
     ])
 
-    # ОТЗЫВЫ
     with t1:
         if not feedbacks:
             st.success("✅ Нет неотвеченных отзывов!")
@@ -703,7 +675,6 @@ def show_feedback_tab(store):
             order_status = fb.get("orderStatus", "") or ""
             product = pd_.get("productName", "") or fb.get("productName", "") or ""
             created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
-
             preview_key_fb = f"preview_fb_{fb_id}"
 
             with st.container():
@@ -718,7 +689,6 @@ def show_feedback_tab(store):
                     if rating <= 3:
                         st.caption("🔴 1-3 звезды")
 
-                # Жіберілген жауап
                 if fb_id in auto_replied:
                     reply_text = auto_replied[fb_id]
                     if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
@@ -729,8 +699,6 @@ def show_feedback_tab(store):
                         st.success("✅ Опубликован")
                         with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
-
-                # Preview режимі
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
                     edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
@@ -751,8 +719,6 @@ def show_feedback_tab(store):
                         if st.button("🗑 Удалить", key=f"del_fb_{fb_id}", use_container_width=True):
                             del st.session_state[preview_key_fb]
                             st.rerun()
-
-                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_fb_{fb_id}", use_container_width=True):
                         with st.spinner("ИИ генерирует ответ..."):
@@ -762,7 +728,6 @@ def show_feedback_tab(store):
 
                 st.divider()
 
-    # ВОПРОСЫ
     with t2:
         if not questions:
             st.success("✅ Нет неотвеченных вопросов!")
@@ -783,7 +748,6 @@ def show_feedback_tab(store):
                 with col2:
                     pass
 
-                # Жіберілген жауап
                 if q_id in auto_replied:
                     reply_text = auto_replied[q_id]
                     if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text:
@@ -794,8 +758,6 @@ def show_feedback_tab(store):
                         st.success("✅ Опубликован")
                         with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
-
-                # Preview режимі
                 elif preview_key_q in st.session_state:
                     preview_text = st.session_state[preview_key_q]
                     edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_q_{q_id}", height=100)
@@ -816,8 +778,6 @@ def show_feedback_tab(store):
                         if st.button("🗑 Удалить", key=f"del_q_{q_id}", use_container_width=True):
                             del st.session_state[preview_key_q]
                             st.rerun()
-
-                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_q_{q_id}", use_container_width=True):
                         with st.spinner("ИИ генерирует ответ..."):
@@ -826,6 +786,197 @@ def show_feedback_tab(store):
                             st.rerun()
 
                 st.divider()
+
+
+# ══════════════════════════════════════════════════════════════
+#  ЖАҢА ФУНКЦИЯ — ПРИЁМКА
+# ══════════════════════════════════════════════════════════════
+
+def show_priemka_tab(store):
+    idx = store["idx"]
+    stats_key = store["stats_key"]
+    name = store["name"]
+
+    st.markdown("#### 📥 Приёмка — принятые товары")
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        pr_from = st.date_input(
+            "Начало периода",
+            value=date.today() - timedelta(days=30),
+            key=f"pr_from_{idx}"
+        )
+    with col2:
+        pr_to = st.date_input(
+            "Конец периода",
+            value=date.today(),
+            key=f"pr_to_{idx}"
+        )
+    with col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_pr = st.button(
+            "🔄 Загрузить приёмку",
+            key=f"pr_load_{idx}",
+            use_container_width=True
+        )
+
+    pr_key = f"priemka_{idx}"
+    pr_period_key = f"priemka_period_{idx}"
+    current_period = f"{pr_from}_{pr_to}"
+
+    if st.session_state.get(pr_period_key) != current_period:
+        if pr_key in st.session_state:
+            del st.session_state[pr_key]
+        st.session_state[pr_period_key] = current_period
+
+    if load_pr:
+        with st.spinner(f"[{name}] Загрузка поставок..."):
+            try:
+                date_from_str = pr_from.strftime("%Y-%m-%dT00:00:00")
+                rows = []
+                for attempt in range(3):
+                    r = requests.get(
+                        "https://statistics-api.wildberries.ru/api/v1/supplier/incomes",
+                        headers={"Authorization": stats_key},
+                        params={"dateFrom": date_from_str},
+                        timeout=60
+                    )
+                    if r.status_code == 429:
+                        st.info("⏳ WB API лимит — 65 сек...")
+                        time.sleep(65)
+                        continue
+                    r.raise_for_status()
+                    rows = r.json()
+                    break
+
+                st.session_state[pr_key] = rows
+                st.success(f"✅ {len(rows)} жазба жүктелді!")
+            except Exception as e:
+                st.error(f"Ошибка: {e}")
+
+    if pr_key not in st.session_state:
+        st.info("👆 Период таңдап **«Загрузить приёмку»** батырмасын басыңыз")
+        return
+
+    rows = st.session_state[pr_key]
+    if not rows:
+        st.warning("Деректер жоқ")
+        return
+
+    df_pr = pd.DataFrame(rows)
+
+    for col in ["date", "lastChangeDate", "dateClose"]:
+        if col in df_pr.columns:
+            df_pr[col] = pd.to_datetime(df_pr[col], errors="coerce")
+
+    if "status" in df_pr.columns:
+        df_pr = df_pr[df_pr["status"] == "Принято"]
+
+    if "dateClose" in df_pr.columns:
+        df_pr = df_pr[
+            (df_pr["dateClose"].dt.date >= pr_from) &
+            (df_pr["dateClose"].dt.date <= pr_to)
+        ]
+
+    if df_pr.empty:
+        st.warning(f"Таңдалған кезеңде қабылданған товар жоқ ({pr_from} — {pr_to})")
+        return
+
+    total_qty    = int(df_pr["quantity"].sum()) if "quantity" in df_pr.columns else 0
+    total_arts   = df_pr["supplierArticle"].nunique() if "supplierArticle" in df_pr.columns else 0
+    total_supply = df_pr["incomeId"].nunique() if "incomeId" in df_pr.columns else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("📦 Принято (шт)", f"{total_qty:,}".replace(",", " "))
+    c2.metric("🏷️ Артикулов",   total_arts)
+    c3.metric("🚚 Поставок",     total_supply)
+
+    st.divider()
+
+    st.markdown("#### 📊 По артикулам")
+
+    grp_cols = ["supplierArticle"]
+    if "warehouseName" in df_pr.columns:
+        grp_cols.append("warehouseName")
+
+    agg_df = (
+        df_pr
+        .groupby(grp_cols)
+        .agg(
+            qty=("quantity", "sum"),
+            поставок=("incomeId", "nunique"),
+            последняя=("dateClose", "max"),
+        )
+        .reset_index()
+        .sort_values("qty", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    agg_df["последняя"] = agg_df["последняя"].dt.strftime("%d.%m.%Y")
+    agg_df = agg_df.rename(columns={
+        "supplierArticle": "Артикул",
+        "warehouseName":   "Склад",
+        "qty":             "Принято (шт)",
+        "поставок":        "Поставок",
+        "последняя":       "Последняя дата",
+    })
+
+    def style_qty(val):
+        if not isinstance(val, (int, float)):
+            return ""
+        if val == 0:
+            return "color:#A32D2D"
+        if val >= 100:
+            return "color:#3B6D11;font-weight:bold"
+        return ""
+
+    styled_agg = agg_df.style.map(style_qty, subset=["Принято (шт)"])
+    st.dataframe(
+        styled_agg,
+        use_container_width=True,
+        height=420,
+        column_config={
+            "Принято (шт)": st.column_config.NumberColumn(format="%d шт"),
+            "Поставок":     st.column_config.NumberColumn(format="%d"),
+        }
+    )
+    st.caption(f"Жалпы: {len(agg_df)} артикул позиция")
+
+    st.divider()
+
+    if "dateClose" in df_pr.columns:
+        st.markdown("#### 📈 Приёмка по дням")
+        daily_pr = (
+            df_pr
+            .groupby(df_pr["dateClose"].dt.date)["quantity"]
+            .sum()
+            .reset_index()
+        )
+        daily_pr.columns = ["Дата", "Принято (шт)"]
+        daily_pr = daily_pr.sort_values("Дата")
+        st.bar_chart(daily_pr.set_index("Дата"), height=260)
+
+    st.divider()
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        agg_df.to_excel(writer, index=False, sheet_name="Приёмка по артикулам")
+        raw_cols = [c for c in ["incomeId", "supplierArticle", "quantity",
+                                 "dateClose", "warehouseName", "status", "nmId"]
+                    if c in df_pr.columns]
+        raw_out = df_pr[raw_cols].copy()
+        if "dateClose" in raw_out.columns:
+            raw_out["dateClose"] = raw_out["dateClose"].dt.strftime("%d.%m.%Y")
+        raw_out.to_excel(writer, index=False, sheet_name="Все строки")
+
+    period_str = f"{pr_from.strftime('%d.%m')}-{pr_to.strftime('%d.%m.%Y')}"
+    st.download_button(
+        f"⬇️ Excel — Приёмка {store['name']} ({period_str})",
+        data=buf.getvalue(),
+        file_name=f"Приёмка_{store['name']}_{period_str}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"pr_dl_{idx}"
+    )
 
 
 def show_finance_tab(store, df):
@@ -1282,6 +1433,7 @@ def show_finance_tab(store, df):
             else:
                 st.dataframe(seb_df, use_container_width=True, height=400)
 
+
 def show_store(store, df, sales30, filter_status, search):
     idx = store["idx"]
     role = st.session_state.get("role", "manager")
@@ -1290,8 +1442,9 @@ def show_store(store, df, sales30, filter_status, search):
         st.warning("Нет данных или не загружено")
         return
 
-    tab_ostatok, tab_analytic, tab_finance, tab_feedback = st.tabs([
-        "📦 Остатки", "📊 Аналитика — 30 дней", "💰 Финансы", "💬 Отзывы & Вопросы"
+    # ── 5 ТАБ (приёмка қосылды) ──
+    tab_ostatok, tab_analytic, tab_finance, tab_priemka, tab_feedback = st.tabs([
+        "📦 Остатки", "📊 Аналитика — 30 дней", "💰 Финансы", "📥 Приёмка", "💬 Отзывы & Вопросы"
     ])
 
     with tab_analytic:
@@ -1321,6 +1474,9 @@ def show_store(store, df, sales30, filter_status, search):
 
     with tab_finance:
         show_finance_tab(store, df)
+
+    with tab_priemka:
+        show_priemka_tab(store)
 
     with tab_feedback:
         show_feedback_tab(store)
@@ -1410,6 +1566,7 @@ def show_store(store, df, sales30, filter_status, search):
                 save_json(FBO_FILE, all_fbo)
                 st.rerun()
 
+
 # ── SIDEBAR ──
 stores = get_stores()
 _role = st.session_state.get("role", "manager")
@@ -1430,7 +1587,6 @@ with st.sidebar:
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
 
-        # ВБ Кабинеты — native selectbox
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on    = st.session_state.get("show_magkein", False)
 
@@ -1445,7 +1601,6 @@ with st.sidebar:
                                 index=_store_names.index(_cur_store_name) if _cur_store_name in _store_names else 0,
                                 key="wb_nav_select")
 
-        # Тек selectbox өзгергенде навигация — MAGKEIN ашық болса өзгертпе
         _prev_sel = st.session_state.get("wb_prev_sel", _store_names[0])
         if _nav_sel != _prev_sel:
             st.session_state.wb_prev_sel = _nav_sel
@@ -1458,7 +1613,6 @@ with st.sidebar:
 
         st.divider()
 
-        # MAGKEIN — бөлек батырма
         _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
         if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
@@ -1478,6 +1632,7 @@ with st.sidebar:
         st.session_state.role = None
         st.session_state.store_access = None
         st.rerun()
+
 
 # ── НЕГІЗГІ ──
 st.title("📦 Wildberries Отчёт")
@@ -1554,7 +1709,6 @@ if _show_magkein:
         def fmtN(n): return f"{round(n):,}".replace(",", " ")
         ndv_rate = 16 / 116
 
-        # ── ӘР ДҮКЕН БОЙЫНША ЖОЛДАР ──
         summary_rows = []
         total_for_pay = total_napay = total_profit = total_qty = total_vozvrat_qty = 0
 
@@ -1587,7 +1741,6 @@ if _show_magkein:
             ipn       = do_ipn * 0.10 if do_ipn > 0 else 0
             profit    = do_ipn - ipn - ndv_nashe - upakovka
 
-            # Қолмен енгізілген шығындарды алу
             man = st.session_state.get(f"fin_manual_{idx}", {"logistic": 0, "samovykup": 0, "reklama_napay": 0})
             profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
 
@@ -1610,7 +1763,6 @@ if _show_magkein:
         if not summary_rows:
             st.warning("Нет данных")
         else:
-            # ЖАЛПЫ МЕТРИКАЛАР
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("💰 К перечислению", fmt(total_for_pay))
             c2.metric("📊 На пэй (жалпы)", fmt(total_napay))
@@ -1620,10 +1772,8 @@ if _show_magkein:
 
             st.divider()
 
-            # ДҮКЕН БОЙЫНША КЕСТЕ
             st.markdown("#### 🏪 Сравнение по магазинам")
 
-            # Жалпы жол қосу
             summary_rows.append({
                 "Магазин": "🔷 ИТОГО (MAGKEIN)",
                 "К перечислению (₸)": round(total_for_pay),
@@ -1659,17 +1809,14 @@ if _show_magkein:
 
             st.divider()
 
-            # ДИАГРАММА — таза пайда салыстыру
             st.markdown("#### 📊 Чистая прибыль по магазинам")
             chart_df = mg_df[mg_df["Магазин"] != "🔷 ИТОГО (MAGKEIN)"][["Магазин", "Чистая прибыль (₸)"]].set_index("Магазин")
             st.bar_chart(chart_df, height=300)
 
-            # ── АРТИКУЛ БОЙЫНША ЖИЫНТЫҚ КЕСТЕ ──
             st.divider()
             st.markdown("#### 📦 Продажи по артикулам (все магазины)")
 
-            # Барлық дүкеннің артикулдарын біріктіру
-            art_combined = {}  # {article: {store_name: qty, ...}}
+            art_combined = {}
             for s in visible_stores:
                 fin = mg_results.get(s["name"], {})
                 by_art = fin.get("by_article", {})
@@ -1707,7 +1854,6 @@ if _show_magkein:
                     column_config=col_cfg
                 )
 
-            # EXCEL ЖҮКТЕУ
             st.divider()
             buf_mg = io.BytesIO()
             import openpyxl as _oxl2
@@ -1745,7 +1891,6 @@ if _show_magkein:
             )
 
 else:
-    # Дүкен навигациясы — nav_view бойынша
     _nav = st.session_state.get("nav_view", "store_0")
     try:
         _nav_idx = int(_nav.split("_")[1])
