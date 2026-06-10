@@ -832,7 +832,7 @@ def show_priemka_tab(store):
     if load_pr:
         with st.spinner(f"[{name}] Загрузка поставок..."):
             try:
-                date_from_str = pr_from.strftime("%Y-%m-%dT00:00:00")
+                date_from_str = pr_from.strftime("%Y-%m-%d")
                 rows = []
                 for attempt in range(3):
                     r = requests.get(
