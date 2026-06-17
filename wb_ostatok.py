@@ -12,7 +12,6 @@ import base64
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
 
-# Тұрақты деректер қоймасы
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wb_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -22,7 +21,6 @@ SEBEST_FILE = os.path.join(DATA_DIR, "sebest_data.json")
 def _tmp(name):
     return os.path.join(DATA_DIR, name)
 
-# ── GITHUB АВТОСАҚТАУ ──────────────────────────────────────────
 def _gh_headers():
     token = st.secrets.get("GITHUB_TOKEN", "")
     if not token:
@@ -30,13 +28,12 @@ def _gh_headers():
     return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
 def _gh_repo():
-    return st.secrets.get("GITHUB_REPO", "")   # "Didar003/wb-ostatok"
+    return st.secrets.get("GITHUB_REPO", "")
 
 def _gh_branch():
     return st.secrets.get("GITHUB_BRANCH", "main")
 
 def github_load(filename):
-    """GitHub-тан файлды оқу"""
     headers = _gh_headers()
     repo    = _gh_repo()
     if not headers or not repo:
@@ -52,19 +49,16 @@ def github_load(filename):
     return None
 
 def github_save(filename, data):
-    """GitHub-қа файлды сақтау (автоcommit)"""
     headers = _gh_headers()
     repo    = _gh_repo()
     if not headers or not repo:
         return False
     try:
         url = f"https://api.github.com/repos/{repo}/contents/wb_data/{filename}"
-        # Бар файлдың SHA-сын алу
         sha = None
         r = requests.get(url, headers=headers, params={"ref": _gh_branch()}, timeout=10)
         if r.status_code == 200:
             sha = r.json().get("sha")
-        # Жаңа мазмұн
         content_b64 = base64.b64encode(
             json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         ).decode("utf-8")
@@ -81,15 +75,10 @@ def github_save(filename, data):
         return False
 
 def load_json(path):
-    """Оқу: алдымен сессия кэші → локал файл → GitHub"""
     filename = os.path.basename(path)
     cache_key = f"_json_cache_{filename}"
-
-    # Сессия кэшінен оқу (ең жылдам)
     if cache_key in st.session_state:
         return st.session_state[cache_key]
-
-    # Локал файлдан оқу
     data = None
     try:
         if os.path.exists(path):
@@ -97,8 +86,6 @@ def load_json(path):
                 data = json.load(f)
     except:
         pass
-
-    # Локал жоқ болса — GitHub-тан оқу
     if data is None and filename in ("sebest_data.json", "fbo_data.json"):
         gh_data = github_load(filename)
         if gh_data is not None:
@@ -109,28 +96,21 @@ def load_json(path):
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except:
                 pass
-
     if data is None:
         data = {}
-
-    # Кэшке сақтау
     st.session_state[cache_key] = data
     return data
 
 def save_json(path, data):
-    """Локалға + кэшке + GitHub-қа сақтау"""
     filename = os.path.basename(path)
-    # Кэшті жаңарту
     cache_key = f"_json_cache_{filename}"
     st.session_state[cache_key] = data
-    # Локалға жазу
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Не сохранено локально: {e}")
-    # GitHub-қа автосақтау
     if filename in ("sebest_data.json", "fbo_data.json"):
         github_save(filename, data)
 
@@ -202,7 +182,6 @@ def wb_get_retry(url, key, params={}, max_retries=3, store_name=""):
 
 def fetch_warehouse_remains(analytics_key):
     base = "https://seller-analytics-api.wildberries.ru"
-    # 429 retry — 3 попытки
     for attempt in range(3):
         r = requests.get(f"{base}/api/v1/warehouse_remains",
                          headers={"Authorization": analytics_key},
@@ -558,7 +537,6 @@ def send_feedback_complaint(fb_key, feedback_id):
         return False
 
 def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables="", order_status=""):
-    """Claude API арқылы ИИ жауап жасау — 529 retry қосылған"""
     try:
         if reply_type == "feedback":
             is_rejected = order_status in ("rejected", "cancelled", "canceled")
@@ -606,7 +584,6 @@ def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", 
         if not anthropic_key:
             return "⚠️ ANTHROPIC_API_KEY Secrets-ке қосылмаған"
 
-        # 529 ошибка болса 3 рет қайталайды
         for attempt in range(3):
             r = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -647,7 +624,6 @@ def show_feedback_tab(store):
         st.warning("⚠️ Добавьте токен STORE_{n}_FEEDBACK в Secrets")
         return
 
-    # Деректерді жүктеу
     load_key = f"fb_data_{idx}"
     if load_key not in st.session_state:
         st.session_state[load_key] = None
@@ -671,7 +647,6 @@ def show_feedback_tab(store):
     questions = data.get("questions", [])
     auto_replied = load_json(_tmp(f"auto_replied_{idx}.json"))
 
-    # Метрикалар
     low_star = [f for f in feedbacks if f.get("productValuation", 5) <= 3]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("⭐ Новые отзывы", len(feedbacks))
@@ -681,7 +656,6 @@ def show_feedback_tab(store):
 
     st.divider()
 
-    # ── 2 ТАБ ──
     t1, t2 = st.tabs([
         f"⭐ Отзывы ({len(feedbacks)})",
         f"❓ Авто вопросы ({len(questions)})",
@@ -718,7 +692,6 @@ def show_feedback_tab(store):
                     if rating <= 3:
                         st.caption("🔴 1-3 звезды")
 
-                # Жіберілген жауап
                 if fb_id in auto_replied:
                     reply_text = auto_replied[fb_id]
                     if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text or "404" in reply_text:
@@ -730,7 +703,6 @@ def show_feedback_tab(store):
                         with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
 
-                # Preview режимі
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
                     edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
@@ -752,7 +724,6 @@ def show_feedback_tab(store):
                             del st.session_state[preview_key_fb]
                             st.rerun()
 
-                # ИИ жауап батырмасы
                 else:
                     if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_fb_{fb_id}", use_container_width=True):
                         with st.spinner("ИИ генерирует ответ..."):
@@ -766,66 +737,110 @@ def show_feedback_tab(store):
     with t2:
         if not questions:
             st.success("✅ Нет неотвеченных вопросов!")
-        for q in questions:
-            q_id = q.get("id", "")
-            q_text = q.get("text", "") or ""
-            pd_q = q.get("productDetails", {}) or {}
-            product = pd_q.get("productName", "") or q.get("productName", "") or ""
-            created = q.get("createdDate", "")[:10] if q.get("createdDate") else ""
-            preview_key_q = f"preview_q_{q_id}"
+        else:
+            # ── АВТО ОТВЕТ БАРЛЫҒЫНА БАТЫРМАСЫ ──
+            unanswered_q = [q for q in questions if q.get("id", "") not in auto_replied]
+            if unanswered_q:
+                st.info(f"📋 Жауапсыз вопрос: **{len(unanswered_q)}** дана")
+                if st.button(
+                    f"🤖 Авто ответ барлығына ({len(unanswered_q)} вопрос)",
+                    key=f"auto_all_q_{idx}",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    progress_bar = st.progress(0, text="Жіберілуде...")
+                    success_count = 0
+                    error_count = 0
+                    for i, q in enumerate(unanswered_q):
+                        q_id = q.get("id", "")
+                        q_text = q.get("text", "") or ""
+                        pd_q = q.get("productDetails", {}) or {}
+                        product = pd_q.get("productName", "") or q.get("productName", "") or ""
 
-            with st.container():
-                col1, col2 = st.columns([6, 2])
-                with col1:
-                    st.markdown(f'❓ <span style="font-size:12px;color:gray;">{product} · {created}</span>', unsafe_allow_html=True)
-                    if q_text:
-                        st.caption(f'"{q_text[:200]}{"..." if len(q_text)>200 else ""}"')
-                with col2:
-                    pass
+                        pct = int((i) / len(unanswered_q) * 100)
+                        progress_bar.progress(pct, text=f"ИИ жауап жасауда: {i+1}/{len(unanswered_q)} — {product[:40]}")
 
-                # Жіберілген жауап
-                if q_id in auto_replied:
-                    reply_text = auto_replied[q_id]
-                    if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text:
-                        del auto_replied[q_id]
-                        save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
-                        st.warning("⚠️ Ошибочный ответ удалён")
+                        reply = ai_generate_reply(product, q_text, 5, "question")
+                        if reply and "ошибка" not in reply.lower() and "⚠️" not in reply:
+                            ok = send_question_reply(fb_key, q_id, reply)
+                            if ok:
+                                auto_replied[q_id] = reply
+                                success_count += 1
+                            else:
+                                error_count += 1
+                        else:
+                            error_count += 1
+                        time.sleep(1.5)
+
+                    save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
+                    progress_bar.progress(100, text="Дайын!")
+                    time.sleep(0.5)
+
+                    if success_count:
+                        st.success(f"✅ {success_count} вопросқа жауап жіберілді!")
+                    if error_count:
+                        st.warning(f"⚠️ {error_count} вопрос жіберілмеді")
+                    st.rerun()
+
+            st.divider()
+            # ── ЖЕК-ЖЕК ВОПРОС КАРТОЧКАЛАРЫ ──
+            for q in questions:
+                q_id = q.get("id", "")
+                q_text = q.get("text", "") or ""
+                pd_q = q.get("productDetails", {}) or {}
+                product = pd_q.get("productName", "") or q.get("productName", "") or ""
+                created = q.get("createdDate", "")[:10] if q.get("createdDate") else ""
+                preview_key_q = f"preview_q_{q_id}"
+
+                with st.container():
+                    col1, col2 = st.columns([6, 2])
+                    with col1:
+                        st.markdown(f'❓ <span style="font-size:12px;color:gray;">{product} · {created}</span>', unsafe_allow_html=True)
+                        if q_text:
+                            st.caption(f'"{q_text[:200]}{"..." if len(q_text)>200 else ""}"')
+                    with col2:
+                        pass
+
+                    if q_id in auto_replied:
+                        reply_text = auto_replied[q_id]
+                        if "ИИ ошибка" in reply_text or "Error" in reply_text or "401" in reply_text:
+                            del auto_replied[q_id]
+                            save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
+                            st.warning("⚠️ Ошибочный ответ удалён")
+                        else:
+                            st.success("✅ Опубликован")
+                            with st.expander("Посмотреть ответ"):
+                                st.caption(reply_text)
+
+                    elif preview_key_q in st.session_state:
+                        preview_text = st.session_state[preview_key_q]
+                        edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_q_{q_id}", height=100)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("📤 Опубликовать", key=f"pub_q_{q_id}", use_container_width=True):
+                                with st.spinner("Отправляется..."):
+                                    time.sleep(1.1)
+                                    ok = send_question_reply(fb_key, q_id, edited)
+                                    if ok:
+                                        auto_replied[q_id] = edited
+                                        save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
+                                        del st.session_state[preview_key_q]
+                                        st.rerun()
+                                    else:
+                                        st.error("Не отправлено")
+                        with c2:
+                            if st.button("🗑 Удалить", key=f"del_q_{q_id}", use_container_width=True):
+                                del st.session_state[preview_key_q]
+                                st.rerun()
+
                     else:
-                        st.success("✅ Опубликован")
-                        with st.expander("Посмотреть ответ"):
-                            st.caption(reply_text)
+                        if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_q_{q_id}", use_container_width=True):
+                            with st.spinner("ИИ генерирует ответ..."):
+                                reply = ai_generate_reply(product, q_text, 5, "question")
+                                st.session_state[preview_key_q] = reply
+                                st.rerun()
 
-                # Preview режимі
-                elif preview_key_q in st.session_state:
-                    preview_text = st.session_state[preview_key_q]
-                    edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_q_{q_id}", height=100)
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("📤 Опубликовать", key=f"pub_q_{q_id}", use_container_width=True):
-                            with st.spinner("Отправляется..."):
-                                time.sleep(1.1)
-                                ok = send_question_reply(fb_key, q_id, edited)
-                                if ok:
-                                    auto_replied[q_id] = edited
-                                    save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
-                                    del st.session_state[preview_key_q]
-                                    st.rerun()
-                                else:
-                                    st.error("Не отправлено")
-                    with c2:
-                        if st.button("🗑 Удалить", key=f"del_q_{q_id}", use_container_width=True):
-                            del st.session_state[preview_key_q]
-                            st.rerun()
-
-                # ИИ жауап батырмасы
-                else:
-                    if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_q_{q_id}", use_container_width=True):
-                        with st.spinner("ИИ генерирует ответ..."):
-                            reply = ai_generate_reply(product, q_text, 5, "question")
-                            st.session_state[preview_key_q] = reply
-                            st.rerun()
-
-                st.divider()
+                    st.divider()
 
 
 def show_finance_tab(store, df):
@@ -1430,7 +1445,6 @@ with st.sidebar:
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
 
-        # ВБ Кабинеты — native selectbox
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on    = st.session_state.get("show_magkein", False)
 
@@ -1445,7 +1459,6 @@ with st.sidebar:
                                 index=_store_names.index(_cur_store_name) if _cur_store_name in _store_names else 0,
                                 key="wb_nav_select")
 
-        # Тек selectbox өзгергенде навигация — MAGKEIN ашық болса өзгертпе
         _prev_sel = st.session_state.get("wb_prev_sel", _store_names[0])
         if _nav_sel != _prev_sel:
             st.session_state.wb_prev_sel = _nav_sel
@@ -1458,7 +1471,6 @@ with st.sidebar:
 
         st.divider()
 
-        # MAGKEIN — бөлек батырма
         _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
         if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
@@ -1554,7 +1566,6 @@ if _show_magkein:
         def fmtN(n): return f"{round(n):,}".replace(",", " ")
         ndv_rate = 16 / 116
 
-        # ── ӘР ДҮКЕН БОЙЫНША ЖОЛДАР ──
         summary_rows = []
         total_for_pay = total_napay = total_profit = total_qty = total_vozvrat_qty = 0
 
@@ -1587,7 +1598,6 @@ if _show_magkein:
             ipn       = do_ipn * 0.10 if do_ipn > 0 else 0
             profit    = do_ipn - ipn - ndv_nashe - upakovka
 
-            # Қолмен енгізілген шығындарды алу
             man = st.session_state.get(f"fin_manual_{idx}", {"logistic": 0, "samovykup": 0, "reklama_napay": 0})
             profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
 
@@ -1610,7 +1620,6 @@ if _show_magkein:
         if not summary_rows:
             st.warning("Нет данных")
         else:
-            # ЖАЛПЫ МЕТРИКАЛАР
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("💰 К перечислению", fmt(total_for_pay))
             c2.metric("📊 На пэй (жалпы)", fmt(total_napay))
@@ -1620,10 +1629,8 @@ if _show_magkein:
 
             st.divider()
 
-            # ДҮКЕН БОЙЫНША КЕСТЕ
             st.markdown("#### 🏪 Сравнение по магазинам")
 
-            # Жалпы жол қосу
             summary_rows.append({
                 "Магазин": "🔷 ИТОГО (MAGKEIN)",
                 "К перечислению (₸)": round(total_for_pay),
@@ -1659,17 +1666,14 @@ if _show_magkein:
 
             st.divider()
 
-            # ДИАГРАММА — таза пайда салыстыру
             st.markdown("#### 📊 Чистая прибыль по магазинам")
             chart_df = mg_df[mg_df["Магазин"] != "🔷 ИТОГО (MAGKEIN)"][["Магазин", "Чистая прибыль (₸)"]].set_index("Магазин")
             st.bar_chart(chart_df, height=300)
 
-            # ── АРТИКУЛ БОЙЫНША ЖИЫНТЫҚ КЕСТЕ ──
             st.divider()
             st.markdown("#### 📦 Продажи по артикулам (все магазины)")
 
-            # Барлық дүкеннің артикулдарын біріктіру
-            art_combined = {}  # {article: {store_name: qty, ...}}
+            art_combined = {}
             for s in visible_stores:
                 fin = mg_results.get(s["name"], {})
                 by_art = fin.get("by_article", {})
@@ -1707,7 +1711,6 @@ if _show_magkein:
                     column_config=col_cfg
                 )
 
-            # EXCEL ЖҮКТЕУ
             st.divider()
             buf_mg = io.BytesIO()
             import openpyxl as _oxl2
@@ -1745,7 +1748,6 @@ if _show_magkein:
             )
 
 else:
-    # Дүкен навигациясы — nav_view бойынша
     _nav = st.session_state.get("nav_view", "store_0")
     try:
         _nav_idx = int(_nav.split("_")[1])
