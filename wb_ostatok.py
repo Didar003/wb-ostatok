@@ -963,11 +963,12 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
 
     samovykup = man.get("samovykup", 0)
     buhgalter = man.get("buhgalter", 0)
+    upak_price = man.get("upak_price", 100)  # 1 шт-қа упаковка бағасы (менеджер қояды)
 
     # ── Себестоимость (жалпы) ──
     tot_seb = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
     tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
-    upakovka = tot_qty_sold * 100
+    upakovka = tot_qty_sold * upak_price
 
     # ── Логистика до склада (АВТО — логистика до ВБ кестесінен) ──
     logistika = 0
@@ -1019,7 +1020,7 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
         # вб получено
         vb_poluch = fp_a - per_sht * qty_a
         # расходы = упаковка + логистика до ВБ
-        upak_a  = qty_a * 100
+        upak_a  = qty_a * upak_price
         rashody = upak_a + logist_a
         # себес
         seb_tot_a = seb_per * qty_a
@@ -1055,6 +1056,7 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
         "priemka": priemka, "vozvrat": vozvrat, "vozvrat_qty": vozvrat_qty,
         "total_qty": total_qty, "tot_seb": tot_seb, "tot_qty_sold": tot_qty_sold,
         "upakovka": upakovka, "logistika": logistika, "samovykup": samovykup,
+        "upak_price": upak_price,
         "buhgalter": buhgalter, "vb_uslugi": vb_uslugi, "vb_real_seb": vb_real_seb,
         "baza_ipn": baza_ipn, "ipn": ipn, "obsh_nds": obsh_nds, "nds_post": nds_post,
         "nds_vb": nds_vb, "nash_nds": nash_nds, "napay": napay, "pribyl": pribyl,
@@ -1104,11 +1106,16 @@ def show_finance_tab(store, df):
 
     fin = st.session_state[fin_key]
 
-    # Қолмен енгізілетін (самовыкуп, бухгалтер)
+    # Қолмен енгізілетін (самовыкуп, бухгалтер, упаковка бағасы)
+    # Упаковка бағасы дүкенге тұрақты сақталады (обновлениеде жоғалмайды)
+    all_upak = load_json(SEBEST_FILE)  # SEBEST_FILE ішінде _upak кілтімен сақтаймыз
+    saved_upak = all_upak.get(f"_upak_{idx}", 100)
     man_key = f"fin_manual_{idx}"
     if man_key not in st.session_state:
-        st.session_state[man_key] = {"samovykup": 0, "buhgalter": 0}
+        st.session_state[man_key] = {"samovykup": 0, "buhgalter": 0, "upak_price": saved_upak}
     man = st.session_state[man_key]
+    if "upak_price" not in man:
+        man["upak_price"] = saved_upak
 
     # Реклама (қолмен, тауар бойынша)
     ads_key = f"ads_by_art_{idx}"
@@ -1155,15 +1162,22 @@ def show_finance_tab(store, df):
         rl("[авто] ИПН 10%", f"- {fmt(m['ipn'])}")
         rl("[авто] Себестоимость", f"- {fmt(m['tot_seb'])}")
         rl("[авто] Логистика до склада", f"- {fmt(m['logistika'])}")
-        rl(f"[авто] Упаковка ({fmtN(m['tot_qty_sold'])} × 100₸)", f"- {fmt(m['upakovka'])}")
+        rl(f"[авто] Упаковка ({fmtN(m['tot_qty_sold'])} × {m['upak_price']:.0f}₸)", f"- {fmt(m['upakovka'])}")
         rl("[авто] Реклама (удержания)", f"- {fmt(m['ads'])}")
         if role == "manager":
+            new_upak = st.number_input("[қол] Упаковка 1 шт (₸)", value=float(man.get("upak_price", 100)), min_value=0.0, step=5.0, key=f"upak_{idx}",
+                                       help="Әр ИП-де упаковка бағасы әртүрлі — 1 данаға қанша төлейтініңізді жазыңыз")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
             new_buh = st.number_input("[қол] Бухгалтер (₸)", value=float(man["buhgalter"]), min_value=0.0, step=1000.0, key=f"buh_{idx}")
-            if new_samo != man["samovykup"] or new_buh != man["buhgalter"]:
-                st.session_state[man_key] = {"samovykup": new_samo, "buhgalter": new_buh}
+            if (new_samo != man["samovykup"] or new_buh != man["buhgalter"]
+                    or new_upak != man.get("upak_price", 100)):
+                st.session_state[man_key] = {"samovykup": new_samo, "buhgalter": new_buh, "upak_price": new_upak}
+                # упаковка бағасын тұрақты сақтау (обновлениеде жоғалмас үшін)
+                all_upak[f"_upak_{idx}"] = new_upak
+                save_json(SEBEST_FILE, all_upak)
                 st.rerun()
         else:
+            rl(f"[қол] Упаковка 1 шт", f"{m['upak_price']:.0f} ₸", "plain")
             rl("[қол] Самовыкуп", f"- {fmt(m['samovykup'])}", "plain")
             rl("[қол] Бухгалтер", f"- {fmt(m['buhgalter'])}", "plain")
         st.divider()
@@ -1546,6 +1560,9 @@ if _show_magkein:
             seb_data = all_seb.get(str(idx), {})
             logist_data = all_log.get(str(idx), {})
             man = st.session_state.get(f"fin_manual_{idx}", {"samovykup": 0, "buhgalter": 0})
+            if "upak_price" not in man:
+                man = dict(man)
+                man["upak_price"] = all_seb.get(f"_upak_{idx}", 100)
             ads_by_art = st.session_state.get(f"ads_by_art_{idx}", {})
             m = compute_finance(fin, seb_data, logist_data, ads_by_art, man)
             summary_rows.append({
