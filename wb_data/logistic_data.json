@@ -81,6 +81,10 @@
     "мист dr. althea": {
       "box_price": 16000,
       "box_qty": 0
+    },
+    "345 пенка": {
+      "box_price": 16000,
+      "box_qty": 0
     }
   }
 }
