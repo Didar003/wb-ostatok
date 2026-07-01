@@ -15,8 +15,11 @@ st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wb_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-FBO_FILE    = os.path.join(DATA_DIR, "fbo_data.json")
-SEBEST_FILE = os.path.join(DATA_DIR, "sebest_data.json")
+FBO_FILE      = os.path.join(DATA_DIR, "fbo_data.json")
+SEBEST_FILE   = os.path.join(DATA_DIR, "sebest_data.json")
+LOGISTIC_FILE = os.path.join(DATA_DIR, "logistic_data.json")
+
+PERSIST_FILES = ("sebest_data.json", "fbo_data.json", "logistic_data.json")
 
 def _tmp(name):
     return os.path.join(DATA_DIR, name)
@@ -86,7 +89,7 @@ def load_json(path):
                 data = json.load(f)
     except:
         pass
-    if data is None and filename in ("sebest_data.json", "fbo_data.json"):
+    if data is None and filename in PERSIST_FILES:
         gh_data = github_load(filename)
         if gh_data is not None:
             data = gh_data
@@ -111,7 +114,7 @@ def save_json(path, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Не сохранено локально: {e}")
-    if filename in ("sebest_data.json", "fbo_data.json"):
+    if filename in PERSIST_FILES:
         github_save(filename, data)
 
 def check_password():
@@ -286,15 +289,18 @@ def parse_finance(rows):
     if not rows:
         return {}
     result = {
-        "for_pay": 0,
-        "ads": 0,
-        "storage": 0,
-        "penalty": 0,
-        "logistic": 0,
-        "priemka": 0,
-        "vozvrat": 0,
+        "for_pay": 0,        # К перечислению продавцу
+        "realizacia": 0,     # Вайлдберриз реализовал Товар (Пр)
+        "komissiya": 0,      # Компенсация платёжных услуг
+        "vozmesh_pvz": 0,    # Возмещение за выдачу и возврат на ПВЗ
+        "ads": 0,            # Удержания (реклама)
+        "storage": 0,        # Хранение
+        "penalty": 0,        # Штраф
+        "logistic": 0,       # Услуги по доставке (доставка ВБ)
+        "priemka": 0,        # Операции на приёмке
+        "vozvrat": 0,        # Возврат (сумма)
         "vozvrat_qty": 0,
-        "total_qty": 0,
+        "total_qty": 0,      # сатылған шт (продажа)
         "by_article": {}
     }
 
@@ -306,31 +312,37 @@ def parse_finance(rows):
         storage_fee = float(row.get("storage_fee", 0) or 0)
         penalty_val = float(row.get("penalty", 0) or 0)
         delivery_rub = float(row.get("delivery_rub", 0) or 0)
+        retail = float(row.get("retail_amount", 0) or 0)
+        acquiring = float(row.get("acquiring_fee", 0) or 0)
+        rebill = float(row.get("rebill_logistic_cost", 0) or 0)
         qty = int(row.get("quantity", 0) or 0)
         article = str(row.get("sa_name", "") or "").strip()
 
         if oper_up in ("ПРОДАЖА", "ДОБРОВОЛЬНАЯ КОМПЕНСАЦИЯ ПРИ ВОЗВРАТЕ"):
             result["for_pay"] += ppvz
+            result["realizacia"] += retail
+            result["komissiya"] += abs(acquiring)
+            result["vozmesh_pvz"] += abs(rebill)
             result["total_qty"] += qty
             if article:
                 if article not in result["by_article"]:
-                    result["by_article"][article] = {"qty": 0, "for_pay": 0, "vozvrat": 0}
+                    result["by_article"][article] = {
+                        "qty": 0, "for_pay": 0, "vozvrat": 0, "realizacia": 0
+                    }
                 result["by_article"][article]["qty"] += qty
                 result["by_article"][article]["for_pay"] += ppvz
+                result["by_article"][article]["realizacia"] += retail
         elif oper_up == "ВОЗВРАТ":
             result["vozvrat"] += abs(ppvz)
             result["vozvrat_qty"] += qty
+            result["komissiya"] += abs(acquiring)
+            result["vozmesh_pvz"] += abs(rebill)
             if article and article in result["by_article"]:
                 result["by_article"][article]["vozvrat"] += abs(ppvz)
         elif oper_up == "ЛОГИСТИКА" or "ДОСТАВК" in oper_up:
             result["logistic"] += abs(delivery_rub)
         elif "ОБРАБОТКА" in oper_up:
-            priemka_val = (
-                abs(float(row.get("acceptance", 0) or 0)) or
-                abs(float(row.get("assembly_id", 0) or 0)) or
-                abs(float(row.get("ppvz_for_pay", 0) or 0)) or
-                abs(float(row.get("deduction", 0) or 0))
-            )
+            priemka_val = abs(float(row.get("acceptance", 0) or 0)) or abs(deduct)
             result["priemka"] += priemka_val
         elif "ХРАНЕНИЕ" in oper_up:
             result["storage"] += abs(storage_fee) + abs(deduct)
@@ -471,8 +483,7 @@ def fetch_feedbacks(fb_key, is_answered=False, take=20):
             st.error(f"Feedbacks API ошибка: {r.status_code} — {r.text[:200]}")
             return []
         data = r.json()
-        feedbacks = data.get("data", {}).get("feedbacks", []) or []
-        return feedbacks
+        return data.get("data", {}).get("feedbacks", []) or []
     except Exception as e:
         st.error(f"Feedbacks ошибка: {e}")
         return []
@@ -632,10 +643,7 @@ def show_feedback_tab(store):
         with st.spinner("Загрузка..."):
             feedbacks = fetch_feedbacks(fb_key, is_answered=False, take=30)
             questions = fetch_questions(fb_key, is_answered=False, take=30)
-            st.session_state[load_key] = {
-                "feedbacks": feedbacks,
-                "questions": questions,
-            }
+            st.session_state[load_key] = {"feedbacks": feedbacks, "questions": questions}
             st.rerun()
 
     data = st.session_state[load_key]
@@ -653,15 +661,10 @@ def show_feedback_tab(store):
     c2.metric("❓ Вопросы", len(questions), help="Ответьте вручную")
     c3.metric("🤖 Ответов отправлено", len(auto_replied))
     c4.metric("🔴 1-3 звезды", len(low_star))
-
     st.divider()
 
-    t1, t2 = st.tabs([
-        f"⭐ Отзывы ({len(feedbacks)})",
-        f"❓ Авто вопросы ({len(questions)})",
-    ])
+    t1, t2 = st.tabs([f"⭐ Отзывы ({len(feedbacks)})", f"❓ Авто вопросы ({len(questions)})"])
 
-    # ОТЗЫВЫ
     with t1:
         if not feedbacks:
             st.success("✅ Нет неотвеченных отзывов!")
@@ -677,7 +680,6 @@ def show_feedback_tab(store):
             order_status = fb.get("orderStatus", "") or ""
             product = pd_.get("productName", "") or fb.get("productName", "") or ""
             created = fb.get("createdDate", "")[:10] if fb.get("createdDate") else ""
-
             preview_key_fb = f"preview_fb_{fb_id}"
 
             with st.container():
@@ -702,7 +704,6 @@ def show_feedback_tab(store):
                         st.success("✅ Опубликован")
                         with st.expander("Посмотреть ответ"):
                             st.caption(reply_text)
-
                 elif preview_key_fb in st.session_state:
                     preview_text = st.session_state[preview_key_fb]
                     edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_fb_{fb_id}", height=100)
@@ -723,31 +724,22 @@ def show_feedback_tab(store):
                         if st.button("🗑 Удалить", key=f"del_fb_{fb_id}", use_container_width=True):
                             del st.session_state[preview_key_fb]
                             st.rerun()
-
                 else:
                     if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_fb_{fb_id}", use_container_width=True):
                         with st.spinner("ИИ генерирует ответ..."):
                             reply = ai_generate_reply(product, text, rating, "feedback", pros, cons, bables_text, order_status)
                             st.session_state[preview_key_fb] = reply
                             st.rerun()
-
                 st.divider()
 
-    # ВОПРОСЫ
     with t2:
         if not questions:
             st.success("✅ Нет неотвеченных вопросов!")
         else:
-            # ── АВТО ОТВЕТ БАРЛЫҒЫНА БАТЫРМАСЫ ──
             unanswered_q = [q for q in questions if q.get("id", "") not in auto_replied]
             if unanswered_q:
                 st.info(f"📋 Жауапсыз вопрос: **{len(unanswered_q)}** дана")
-                if st.button(
-                    f"🤖 Авто ответ барлығына ({len(unanswered_q)} вопрос)",
-                    key=f"auto_all_q_{idx}",
-                    use_container_width=True,
-                    type="primary",
-                ):
+                if st.button(f"🤖 Авто ответ барлығына ({len(unanswered_q)} вопрос)", key=f"auto_all_q_{idx}", use_container_width=True, type="primary"):
                     progress_bar = st.progress(0, text="Жіберілуде...")
                     success_count = 0
                     error_count = 0
@@ -756,10 +748,8 @@ def show_feedback_tab(store):
                         q_text = q.get("text", "") or ""
                         pd_q = q.get("productDetails", {}) or {}
                         product = pd_q.get("productName", "") or q.get("productName", "") or ""
-
                         pct = int((i) / len(unanswered_q) * 100)
                         progress_bar.progress(pct, text=f"ИИ жауап жасауда: {i+1}/{len(unanswered_q)} — {product[:40]}")
-
                         reply = ai_generate_reply(product, q_text, 5, "question")
                         if reply and "ошибка" not in reply.lower() and "⚠️" not in reply:
                             ok = send_question_reply(fb_key, q_id, reply)
@@ -771,11 +761,9 @@ def show_feedback_tab(store):
                         else:
                             error_count += 1
                         time.sleep(1.5)
-
                     save_json(_tmp(f"auto_replied_{idx}.json"), auto_replied)
                     progress_bar.progress(100, text="Дайын!")
                     time.sleep(0.5)
-
                     if success_count:
                         st.success(f"✅ {success_count} вопросқа жауап жіберілді!")
                     if error_count:
@@ -783,7 +771,6 @@ def show_feedback_tab(store):
                     st.rerun()
 
             st.divider()
-            # ── ЖЕК-ЖЕК ВОПРОС КАРТОЧКАЛАРЫ ──
             for q in questions:
                 q_id = q.get("id", "")
                 q_text = q.get("text", "") or ""
@@ -811,7 +798,6 @@ def show_feedback_tab(store):
                             st.success("✅ Опубликован")
                             with st.expander("Посмотреть ответ"):
                                 st.caption(reply_text)
-
                     elif preview_key_q in st.session_state:
                         preview_text = st.session_state[preview_key_q]
                         edited = st.text_area("✏️ Ответ ИИ — можно редактировать:", value=preview_text, key=f"edit_q_{q_id}", height=100)
@@ -832,16 +818,244 @@ def show_feedback_tab(store):
                             if st.button("🗑 Удалить", key=f"del_q_{q_id}", use_container_width=True):
                                 del st.session_state[preview_key_q]
                                 st.rerun()
-
                     else:
                         if st.button("🤖 Сгенерировать ответ ИИ", key=f"ai_q_{q_id}", use_container_width=True):
                             with st.spinner("ИИ генерирует ответ..."):
                                 reply = ai_generate_reply(product, q_text, 5, "question")
                                 st.session_state[preview_key_q] = reply
                                 st.rerun()
-
                     st.divider()
 
+def build_finance_excel(m, by_article, seb_data, logist_data, prod_rows, log_rows):
+    import openpyxl as _oxl
+    from openpyxl.styles import Font, PatternFill, Border, Side
+    buf = io.BytesIO()
+    wb = _oxl.Workbook()
+    ws = wb.active
+    ws.title = "Финансы отчет"
+    GREEN  = PatternFill("solid", fgColor="92D050")
+    LGREEN = PatternFill("solid", fgColor="E2EFDA")
+    BLUE   = PatternFill("solid", fgColor="BDD7EE")
+    RED    = PatternFill("solid", fgColor="FF7F7F")
+    BOLD   = Font(bold=True)
+    BOLD12 = Font(bold=True, size=12)
+    def bd():
+        s = Side(style="thin"); return Border(left=s, right=s, top=s, bottom=s)
+    def apply_bd(r1, r2, c1, c2):
+        for r in range(r1, r2+1):
+            for c in range(c1, c2+1):
+                ws.cell(r, c).border = bd()
+    row = 1
+    ws.cell(row, 1, "НА ПЭЙ → ЧИСТАЯ ПРИБЫЛЬ").font = BOLD12
+    row += 1
+    napay_block = [
+        ("авто", "К перечислению",          round(m["for_pay"]),       BLUE,  True),
+        ("авто", "Логистика WB (доставка)", -round(m["logistic_wb"]),  None,  False),
+        ("авто", "Хранение",                -round(m["storage"]),      None,  False),
+        ("авто", "Штраф",                   -round(m["penalty"]),      None,  False),
+        ("авто", "Операции на приёмке",     -round(m["priemka"]),      None,  False),
+        ("авто", "Возврат × 2",             -round(m["vozvrat"]*2),    None,  False),
+        ("авто", "НА ПЭЙ",                  round(m["napay"]),         BLUE,  True),
+        ("авто", "Наш НДС",                 -round(m["nash_nds"]),     None,  False),
+        ("авто", "ИПН 10%",                 -round(m["ipn"]),          None,  False),
+        ("авто", "Себестоимость",           -round(m["tot_seb"]),      None,  False),
+        ("авто", "Логистика до склада",     -round(m["logistika"]),    None,  False),
+        ("авто", "Упаковка",                -round(m["upakovka"]),     None,  False),
+        ("авто", "Реклама (удержания)",     -round(m["ads"]),          None,  False),
+        ("қол",  "Самовыкуп",               -round(m["samovykup"]),    None,  False),
+        ("қол",  "Бухгалтер",               -round(m["buhgalter"]),    None,  False),
+        ("авто", "ЧИСТАЯ ПРИБЫЛЬ",          round(m["pribyl"]),        "profit", True),
+        ("авто", "Рентабельность", f"{m['rent']*100:.1f}%",           "profit", False),
+    ]
+    start = row
+    for tag, label, val, fill, bold in napay_block:
+        c1 = ws.cell(row, 1, f"[{tag}] {label}")
+        c2 = ws.cell(row, 2, val)
+        actual = (GREEN if m["pribyl"] >= 0 else RED) if fill == "profit" else fill
+        if actual:
+            c1.fill = actual; c2.fill = actual
+        if bold:
+            c1.font = BOLD; c2.font = BOLD
+        row += 1
+    apply_bd(start, row-1, 1, 2)
+    row += 2
+
+    ws.cell(row, 1, "РАСЧЁТ НДС И ИПН").font = BOLD12
+    row += 1
+    nds_block = [
+        ("вб услуги", round(m["vb_uslugi"])),
+        ("вб реал тов − себ", round(m["vb_real_seb"])),
+        ("база для ИПН", round(m["baza_ipn"])),
+        ("ИПН 10%", round(m["ipn"])),
+        ("общий НДС", round(m["obsh_nds"])),
+        ("НДС поставщика", round(m["nds_post"])),
+        ("НДС вб услуги", round(m["nds_vb"])),
+        ("наш НДС", round(m["nash_nds"])),
+    ]
+    start = row
+    for label, val in nds_block:
+        ws.cell(row, 1, label); ws.cell(row, 2, val)
+        row += 1
+    apply_bd(start, row-1, 1, 2)
+    row += 2
+
+    ws.cell(row, 1, "ЧИСТАЯ ПРИБЫЛЬ ПО ТОВАРАМ").font = BOLD12
+    row += 1
+    headers = ["Артикул", "Продано", "вб получено", "расходы", "себес", "реклама", "прибыль", "%"]
+    hr = row
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row, col, h); c.font = BOLD; c.fill = LGREEN
+    row += 1
+    for pr in prod_rows:
+        ws.cell(row, 1, pr["Артикул"])
+        ws.cell(row, 2, pr["Продано (шт)"])
+        ws.cell(row, 3, pr["вб получено (₸)"])
+        ws.cell(row, 4, pr["расходы (₸)"])
+        ws.cell(row, 5, pr["себес (₸)"])
+        ws.cell(row, 6, pr["реклама (₸)"])
+        ws.cell(row, 7, pr["прибыль (₸)"])
+        ws.cell(row, 8, pr["%"])
+        if pr["прибыль (₸)"] < 0:
+            ws.cell(row, 7).fill = RED
+        row += 1
+    apply_bd(hr, row-1, 1, 8)
+    row += 2
+
+    ws.cell(row, 1, "ЛОГИСТИКА ДО ВБ").font = BOLD12
+    row += 1
+    lheaders = ["Артикул", "Продано", "Короб ₸", "Шт/короб", "Итого ₸"]
+    lr = row
+    for col, h in enumerate(lheaders, 1):
+        c = ws.cell(row, col, h); c.font = BOLD; c.fill = LGREEN
+    row += 1
+    for lg in log_rows:
+        ws.cell(row, 1, lg["Артикул"])
+        ws.cell(row, 2, lg["Продано (шт)"])
+        ws.cell(row, 3, lg["Короб (₸)"])
+        ws.cell(row, 4, lg["Шт/короб"])
+        ws.cell(row, 5, lg["Итого (₸)"])
+        row += 1
+    apply_bd(lr, row-1, 1, 5)
+
+    ws.column_dimensions["A"].width = 30
+    for cl in ["B", "C", "D", "E", "F", "G", "H"]:
+        ws.column_dimensions[cl].width = 16
+    wb.save(buf)
+    return buf
+
+def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
+    """Жаңа модель бойынша барлық қаржы көрсеткіштерін есептейді.
+    Қайтарады: dict (жалпы көрсеткіштер + prod_rows + log_rows)."""
+    r = 16/116
+    for_pay    = fin.get("for_pay", 0)
+    realizacia = fin.get("realizacia", 0)
+    komissiya  = fin.get("komissiya", 0)
+    vozmesh    = fin.get("vozmesh_pvz", 0)
+    ads        = fin.get("ads", 0)
+    storage    = fin.get("storage", 0)
+    penalty    = fin.get("penalty", 0)
+    logistic_wb = fin.get("logistic", 0)
+    priemka    = fin.get("priemka", 0)
+    vozvrat    = fin.get("vozvrat", 0)
+    vozvrat_qty = fin.get("vozvrat_qty", 0)
+    total_qty  = fin.get("total_qty", 0)
+    by_article = fin.get("by_article", {})
+
+    samovykup = man.get("samovykup", 0)
+    buhgalter = man.get("buhgalter", 0)
+
+    # ── Себестоимость (жалпы) ──
+    tot_seb = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
+    tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
+    upakovka = tot_qty_sold * 100
+
+    # ── Логистика до склада (АВТО — логистика до ВБ кестесінен) ──
+    logistika = 0
+    for art, d in by_article.items():
+        qty_a = d.get("qty", 0)
+        cfg = logist_data.get(art, {})
+        box_price = cfg.get("box_price", 16000)
+        box_qty   = cfg.get("box_qty", 0)
+        if box_qty and box_qty > 0:
+            logistika += (box_price / box_qty) * qty_a
+
+    # ── 1-ТАБЛИЦА (НДС/ИПН) ──
+    vb_uslugi   = komissiya + vozmesh + logistic_wb + storage + ads + priemka
+    vb_real_seb = realizacia - logistic_wb - tot_seb
+    baza_ipn    = vb_real_seb - vb_uslugi
+    ipn         = baza_ipn * 0.10 if baza_ipn > 0 else 0
+    obsh_nds    = realizacia * r
+    nds_post    = tot_seb * r
+    nds_vb      = vb_uslugi * r
+    nash_nds    = obsh_nds - nds_post - nds_vb
+
+    # ── 2-ТАБЛИЦА (На пэй / Прибыль) ──
+    napay  = for_pay - logistic_wb - storage - penalty - priemka - vozvrat * 2
+    pribyl = (napay - nash_nds - ipn - tot_seb
+              - logistika - upakovka - ads - samovykup - buhgalter)
+    rent   = pribyl / napay if napay else 0
+
+    # ── ТАУАР БОЙЫНША (per-шт есеп) ──
+    # 1 шт-қа кететін жалпы шығын
+    obshie = (logistic_wb + storage + penalty + priemka + vozvrat*2
+              + nash_nds + ipn + buhgalter + samovykup)
+    per_sht = obshie / total_qty if total_qty else 0
+
+    prod_rows = []
+    log_rows  = []
+    for art, d in by_article.items():
+        qty_a = d.get("qty", 0)
+        if qty_a <= 0:
+            continue
+        fp_a = d.get("for_pay", 0)
+        seb_per = seb_data.get(art, 0)
+        # логистика до ВБ (осы тауар)
+        cfg = logist_data.get(art, {})
+        box_price = cfg.get("box_price", 16000)
+        box_qty   = cfg.get("box_qty", 0)
+        logist_a  = (box_price / box_qty) * qty_a if box_qty and box_qty > 0 else 0
+        # вб получено
+        vb_poluch = fp_a - per_sht * qty_a
+        # расходы = упаковка + логистика до ВБ
+        upak_a  = qty_a * 100
+        rashody = upak_a + logist_a
+        # себес
+        seb_tot_a = seb_per * qty_a
+        # реклама (қолмен)
+        reklama_a = ads_by_art.get(art, 0)
+        # прибыль
+        profit_a = vb_poluch - rashody - seb_tot_a - reklama_a
+        pct_a = profit_a / vb_poluch * 100 if vb_poluch else 0
+        prod_rows.append({
+            "Артикул": art,
+            "Продано (шт)": qty_a,
+            "вб получено (₸)": round(vb_poluch),
+            "расходы (₸)": round(rashody),
+            "себес (₸)": round(seb_tot_a),
+            "реклама (₸)": reklama_a,
+            "прибыль (₸)": round(profit_a),
+            "%": round(pct_a, 1),
+        })
+        log_rows.append({
+            "Артикул": art,
+            "Продано (шт)": qty_a,
+            "Короб (₸)": box_price,
+            "Шт/короб": box_qty,
+            "Итого (₸)": round(logist_a),
+        })
+
+    return {
+        "for_pay": for_pay, "realizacia": realizacia, "ads": ads,
+        "storage": storage, "penalty": penalty, "logistic_wb": logistic_wb,
+        "priemka": priemka, "vozvrat": vozvrat, "vozvrat_qty": vozvrat_qty,
+        "total_qty": total_qty, "tot_seb": tot_seb, "tot_qty_sold": tot_qty_sold,
+        "upakovka": upakovka, "logistika": logistika, "samovykup": samovykup,
+        "buhgalter": buhgalter, "vb_uslugi": vb_uslugi, "vb_real_seb": vb_real_seb,
+        "baza_ipn": baza_ipn, "ipn": ipn, "obsh_nds": obsh_nds, "nds_post": nds_post,
+        "nds_vb": nds_vb, "nash_nds": nash_nds, "napay": napay, "pribyl": pribyl,
+        "rent": rent, "per_sht": per_sht,
+        "prod_rows": prod_rows, "log_rows": log_rows,
+    }
 
 def show_finance_tab(store, df):
     idx = store["idx"]
@@ -851,21 +1065,17 @@ def show_finance_tab(store, df):
     role = st.session_state.get("role", "manager")
 
     st.markdown("#### 💰 Финансовый отчёт")
-
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        date_from = st.date_input("Начало периода", value=date.today() - timedelta(days=7),
-                                   key=f"fin_from_{idx}")
+        date_from = st.date_input("Начало периода", value=date.today()-timedelta(days=7), key=f"fin_from_{idx}")
     with col2:
-        date_to = st.date_input("Конец периода", value=date.today(),
-                                 key=f"fin_to_{idx}")
+        date_to = st.date_input("Конец периода", value=date.today(), key=f"fin_to_{idx}")
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
         load_fin = st.button("🔄 Загрузить финансы", key=f"fin_load_{idx}", use_container_width=True)
 
     fin_key = f"finance_{idx}"
     use_key = finance_key if finance_key else stats_key
-
     period_key = f"fin_period_{idx}"
     current_period = f"{date_from}_{date_to}"
     if st.session_state.get(period_key) != current_period:
@@ -876,12 +1086,7 @@ def show_finance_tab(store, df):
     if load_fin:
         with st.spinner(f"[{name}] Загрузка финансового отчёта..."):
             try:
-                rows = fetch_report_detail(
-                    use_key,
-                    date_from.strftime("%Y-%m-%d"),
-                    date_to.strftime("%Y-%m-%d"),
-                    store_name=name
-                )
+                rows = fetch_report_detail(use_key, date_from.strftime("%Y-%m-%d"), date_to.strftime("%Y-%m-%d"), store_name=name)
                 fin = parse_finance(rows)
                 st.session_state[fin_key] = fin
                 st.success("✅ Загружено!")
@@ -894,367 +1099,130 @@ def show_finance_tab(store, df):
 
     fin = st.session_state[fin_key]
 
+    # Қолмен енгізілетін (самовыкуп, бухгалтер)
     man_key = f"fin_manual_{idx}"
     if man_key not in st.session_state:
-        st.session_state[man_key] = {"logistic": 0, "samovykup": 0, "reklama_napay": 0}
+        st.session_state[man_key] = {"samovykup": 0, "buhgalter": 0}
     man = st.session_state[man_key]
 
-    for_pay = fin.get("for_pay", 0)
-    ads = fin.get("ads", 0)
-    storage = fin.get("storage", 0)
-    penalty = fin.get("penalty", 0)
-    logistic_auto = fin.get("logistic", 0)
-    vozvrat = fin.get("vozvrat", 0)
-    vozvrat_qty = fin.get("vozvrat_qty", 0)
-    total_qty = fin.get("total_qty", 0)
-    vozvrat_shygyn = vozvrat * 2
-
-    logistic = man["logistic"]
-    samovykup = man["samovykup"]
-    reklama_napay = man["reklama_napay"]
-
-    seb_key = f"sebest_{idx}"
-    all_seb = load_json(SEBEST_FILE)
-    seb_data = all_seb.get(str(idx), {})
-
-    articles = []
-    if not df.empty:
-        articles = df["supplierArticle"].tolist()
-    by_article = fin.get("by_article", {})
-
-    tot_seb = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
-    tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
-    upakovka = tot_qty_sold * 100
-
-    priemka = fin.get("priemka", 0)
-    napay = for_pay - ads - logistic_auto - storage - priemka - penalty - vozvrat_shygyn
-    ndv_rate = 16/116
-    ndv_total = napay * ndv_rate
-    ndv_prikhod = tot_seb * ndv_rate
-    ndv_nashe = ndv_total - ndv_prikhod
-    do_ipn = napay - tot_seb
-    ipn = do_ipn * 0.10 if do_ipn > 0 else 0
-    profit = do_ipn - ipn - ndv_nashe - logistic - upakovka - samovykup - reklama_napay
-
-    def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
-    def fmtN(n): return f"{round(n):,}".replace(",", " ")
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("К перечислению", fmt(for_pay))
-    c2.metric("На пэй", fmt(napay))
-    c3.metric("Таза пайда", fmt(profit),
-              delta=f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%")
-
-    st.divider()
-
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.markdown("**🧮 Доходы / Расходы**")
-        rows_ui = [
-            ("авто", "К перечислению", fmt(for_pay), "blue"),
-            ("авто", "Удержания (реклама WB)", f"- {fmt(ads)}", "red"),
-            ("авто", "Логистика WB (жеткізу)", f"- {fmt(logistic_auto)}", "red"),
-            ("авто", "Хранение", f"- {fmt(storage)}", "red"),
-            ("авто", "Операции на приёмке", f"- {fmt(priemka)}", "red"),
-            ("авто", "Штраф", f"- {fmt(penalty)}", "red"),
-            ("авто", f"Возврат × 2 ({fmtN(vozvrat_qty)} шт)", f"- {fmt(vozvrat_shygyn)}", "red"),
-        ]
-        for tag, label, value, color in rows_ui:
-            r1, r2 = st.columns([3, 2])
-            r1.caption(f"[{tag}] {label}")
-            if color == "blue":
-                r2.markdown(f"<p style='text-align:right;color:#185FA5;font-weight:500;'>{value}</p>", unsafe_allow_html=True)
-            else:
-                r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>{value}</p>", unsafe_allow_html=True)
-
-        st.markdown(f"**На пэй: :blue[{fmt(napay)}]**")
-        st.divider()
-
-        r1, r2 = st.columns([3, 2])
-        r1.caption("[авто] НДС наше (16/116)")
-        r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(ndv_nashe)}</p>", unsafe_allow_html=True)
-
-        r1, r2 = st.columns([3, 2])
-        r1.caption("[авто] Себестоимость")
-        r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(tot_seb)}</p>", unsafe_allow_html=True)
-
-        r1, r2 = st.columns([3, 2])
-        r1.caption(f"[авто] Упаковка ({fmtN(tot_qty_sold)} × 100₸)")
-        r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(upakovka)}</p>", unsafe_allow_html=True)
-
-        if role == "manager":
-            new_log = st.number_input("[қол] Логистика до склада (₸)", value=float(man["logistic"]), min_value=0.0, step=1000.0, key=f"log_{idx}")
-            new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
-            new_rek = st.number_input("[қол] Реклама на пэй (сыртқы, ₸)", value=float(man["reklama_napay"]), min_value=0.0, step=1000.0, key=f"rek_{idx}")
-            if new_log != man["logistic"] or new_samo != man["samovykup"] or new_rek != man["reklama_napay"]:
-                st.session_state[man_key] = {"logistic": new_log, "samovykup": new_samo, "reklama_napay": new_rek}
-                st.rerun()
-        else:
-            r1, r2 = st.columns([3, 2])
-            r1.caption("[қол] Логистика до склада")
-            r2.markdown(f"<p style='text-align:right;'>- {fmt(logistic)}</p>", unsafe_allow_html=True)
-            r1, r2 = st.columns([3, 2])
-            r1.caption("[қол] Самовыкуп"); r2.markdown(f"<p style='text-align:right;'>- {fmt(samovykup)}</p>", unsafe_allow_html=True)
-            r1, r2 = st.columns([3, 2])
-            r1.caption("[қол] Реклама на пэй"); r2.markdown(f"<p style='text-align:right;'>- {fmt(reklama_napay)}</p>", unsafe_allow_html=True)
-
-        st.divider()
-        st.markdown(f"**До ИПН: {fmt(do_ipn)}**")
-        r1, r2 = st.columns([3, 2])
-        r1.caption("[авто] ИПН 10%")
-        r2.markdown(f"<p style='text-align:right;color:#A32D2D;font-weight:500;'>- {fmt(ipn)}</p>", unsafe_allow_html=True)
-        st.divider()
-        st.markdown(f"### Чистая прибыль: :green[{fmt(profit)}]")
-        if for_pay > 0:
-            st.caption(f"Рентабельность: {profit/for_pay*100:.1f}%")
-
-    with col_right:
-        st.markdown("**🧾 Расчёт НДС**")
-        st.markdown(f"- НДС жалпы: {fmt(ndv_total)}")
-        st.markdown(f"- НДС приход (себест×16/116): {fmt(ndv_prikhod)}")
-        st.markdown(f"- **НДС наше: :red[-{fmt(ndv_nashe)}]**")
-        st.divider()
-
-        st.markdown("**📊 Продажи**")
-        st.markdown(f"- Всего продано: **{fmtN(total_qty)} шт**")
-        st.markdown(f"- Возврат: :red[**{fmtN(vozvrat_qty)} шт**]")
-        st.markdown(f"- Нақты: **{fmtN(total_qty - vozvrat_qty)} шт**")
-        st.markdown(f"- Хранение: :red[{fmt(storage)}]")
-        st.markdown(f"- Операции на приёмке: :red[{fmt(priemka)}]")
-        st.markdown(f"- Штраф: :red[{fmt(penalty)}]")
-        st.markdown(f"- Упаковка жалпы: :red[{fmt(upakovka)}]")
-
-    st.divider()
-    if by_article:
-        excel_rows = []
-        for art, data in by_article.items():
-            qty_a = data.get("qty", 0)
-            wb_a = data.get("for_pay", 0)
-            vozvrat_a = data.get("vozvrat", 0)
-            sebest_a = seb_data.get(art, 0)
-            reklama_a = 0
-            share = wb_a / for_pay if for_pay > 0 else 0
-            napay_a = wb_a - (storage*share) - (priemka*share) - (vozvrat_a*2)
-            ndv_a = napay_a * ndv_rate
-            ndvpr_a = (sebest_a * qty_a) * ndv_rate
-            ndvn_a = ndv_a - ndvpr_a
-            pack_a = qty_a * 100
-            doipn_a = napay_a - ndvn_a - (sebest_a*qty_a) - pack_a - (logistic*share) - (samovykup*share) - reklama_a
-            ipn_a = doipn_a * 0.10 if doipn_a > 0 else 0
-            profit_a = doipn_a - ipn_a
-            pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
-            excel_rows.append({
-                "Артикул": art,
-                "Продано (шт)": qty_a,
-                "WB получено (₸)": round(wb_a),
-                "Себест/шт (₸)": sebest_a,
-                "Реклама (₸)": reklama_a,
-                "Чистая прибыль (₸)": round(profit_a),
-                "Рентабельность (%)": round(pct_a, 1),
-            })
-
-        summary = {
-            "Артикул": "ИТОГО",
-            "Продано (шт)": total_qty,
-            "WB получено (₸)": round(for_pay),
-            "Себест/шт (₸)": "",
-            "Реклама (₸)": sum(r["Реклама (₸)"] for r in excel_rows),
-            "Чистая прибыль (₸)": round(profit),
-            "Рентабельность (%)": round(profit/for_pay*100, 1) if for_pay > 0 else 0,
-        }
-        excel_rows.append(summary)
-
-        buf = io.BytesIO()
-        import openpyxl as _oxl
-        from openpyxl.styles import Font, PatternFill, Border, Side
-        _wb2 = _oxl.Workbook()
-        ws = _wb2.active
-        ws.title = "Финансы отчет"
-
-        GREEN_FILL       = PatternFill("solid", fgColor="92D050")
-        LIGHT_GREEN_FILL = PatternFill("solid", fgColor="E2EFDA")
-        BLUE_FILL        = PatternFill("solid", fgColor="BDD7EE")
-        RED_FILL         = PatternFill("solid", fgColor="FF7F7F")
-        BOLD   = Font(bold=True)
-        BOLD12 = Font(bold=True, size=12)
-
-        def thin_border():
-            s = Side(style="thin")
-            return Border(left=s, right=s, top=s, bottom=s)
-
-        def apply_border(ws, min_row, max_row, min_col, max_col):
-            for r in range(min_row, max_row+1):
-                for c in range(min_col, max_col+1):
-                    ws.cell(r, c).border = thin_border()
-
-        row = 1
-        ws.cell(row, 1, "ЖАЛПЫ ОТЧЕТ").font = BOLD12
-        row += 1
-        general_data = [
-            ("авто", "К перечислению",      round(for_pay),         None,        False),
-            ("авто", "Удержания (реклама)", -round(ads),             None,        False),
-            ("авто", "Логистика WB",        -round(logistic_auto),  None,        False),
-            ("авто", "Хранение",            -round(storage),        None,        False),
-            ("авто", "Операции на приёмке", -round(priemka),        None,        False),
-            ("авто", "Штраф",               -round(penalty),        None,        False),
-            ("авто", "Возврат × 2",         -round(vozvrat_shygyn), None,        False),
-            ("авто", "На пэй",              round(napay),           BLUE_FILL,   True),
-            ("авто", "НДС наше",            -round(ndv_nashe),      None,        False),
-            ("авто", "Себестоимость",       -round(tot_seb),        None,        False),
-            ("авто", "Упаковка",            -round(upakovka),       None,        False),
-            ("қол",  "Логистика до склада", -round(logistic),       None,        False),
-            ("қол",  "Самовыкуп",           -round(samovykup),      None,        False),
-            ("қол",  "Реклама на пэй",      -round(reklama_napay),  None,        False),
-            ("авто", "До ИПН",              round(do_ipn),          None,        False),
-            ("авто", "ИПН 10%",             -round(ipn),            None,        False),
-            ("авто", "ТАЗА ПАЙДА",          round(profit),          "profit",    True),
-            ("авто", "Рентабельность",      f"{profit/for_pay*100:.1f}%" if for_pay > 0 else "0%", "profit", False),
-        ]
-        gen_start = row
-        for tag, label, val, fill, bold in general_data:
-            c1 = ws.cell(row, 1, f"[{tag}] {label}")
-            c2 = ws.cell(row, 2, val)
-            actual_fill = (GREEN_FILL if profit >= 0 else RED_FILL) if fill == "profit" else fill
-            if actual_fill:
-                c1.fill = actual_fill
-                c2.fill = actual_fill
-            if bold:
-                c1.font = BOLD
-                c2.font = BOLD
-            row += 1
-        apply_border(ws, gen_start, row-1, 1, 2)
-
-        row += 1
-        ws.cell(row, 1, "ТАУАР БОЙЫНША ТАЗА ПАЙДА").font = BOLD12
-        row += 1
-        prod_headers = ["Артикул", "Продано (шт)", "WB получено (₸)", "Себест/шт (₸)", "Реклама (₸)", "Чистая прибыль (₸)", "Рентабельность (%)"]
-        prod_hdr_row = row
-        for col, h in enumerate(prod_headers, 1):
-            c = ws.cell(row, col, h)
-            c.font = BOLD
-            c.fill = LIGHT_GREEN_FILL
-        row += 1
-        for r in excel_rows:
-            vals = [r["Артикул"], r["Продано (шт)"], r["WB получено (₸)"],
-                    r["Себест/шт (₸)"], r["Реклама (₸)"], r["Чистая прибыль (₸)"], r["Рентабельность (%)"]]
-            for col, v in enumerate(vals, 1):
-                ws.cell(row, col, v)
-            pval = r["Чистая прибыль (₸)"]
-            if r["Артикул"] == "ЖАЛПЫ":
-                pf = GREEN_FILL if (profit >= 0) else RED_FILL
-                for col in range(1, 8):
-                    ws.cell(row, col).font = BOLD
-                    ws.cell(row, col).fill = pf
-            elif isinstance(pval, (int, float)) and pval < 0:
-                ws.cell(row, 6).fill = RED_FILL
-                ws.cell(row, 7).fill = RED_FILL
-            row += 1
-        apply_border(ws, prod_hdr_row, row-1, 1, 7)
-
-        row += 1
-        ws.cell(row, 1, "СЕБЕСТОИМОСТЬ").font = BOLD12
-        row += 1
-        seb_headers = ["Артикул", "Продано (шт)", "Себест/шт (₸)", "Упаковка (₸)", "Итого (₸)"]
-        seb_hdr_row = row
-        for col, h in enumerate(seb_headers, 1):
-            c = ws.cell(row, col, h)
-            c.font = BOLD
-            c.fill = LIGHT_GREEN_FILL
-        row += 1
-        for art, data in by_article.items():
-            qty_a = data.get("qty", 0)
-            sebest_a = seb_data.get(art, 0)
-            ws.cell(row, 1, art)
-            ws.cell(row, 2, qty_a)
-            ws.cell(row, 3, sebest_a)
-            ws.cell(row, 4, qty_a * 100)
-            ws.cell(row, 5, qty_a * sebest_a)
-            row += 1
-        apply_border(ws, seb_hdr_row, row-1, 1, 5)
-
-        ws.column_dimensions["A"].width = 28
-        for col_ltr in ["B","C","D","E","F","G"]:
-            ws.column_dimensions[col_ltr].width = 18
-
-        _wb2.save(buf)
-
-        period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
-        st.download_button(
-            f"⬇️ Скачать Excel — {store['name']} ({period_str})",
-            data=buf.getvalue(),
-            file_name=f"Финансы_{store['name']}_{period_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"fin_dl_{idx}"
-        )
-
-    st.divider()
-
+    # Реклама (қолмен, тауар бойынша)
     ads_key = f"ads_by_art_{idx}"
     if ads_key not in st.session_state:
         st.session_state[ads_key] = {}
     ads_by_art = st.session_state[ads_key]
 
-    if by_article:
+    # Сақталған деректер
+    all_seb = load_json(SEBEST_FILE)
+    seb_data = all_seb.get(str(idx), {})
+    all_log = load_json(LOGISTIC_FILE)
+    logist_data = all_log.get(str(idx), {})
+
+    # ЕСЕП
+    m = compute_finance(fin, seb_data, logist_data, ads_by_art, man)
+
+    def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
+    def fmtN(n): return f"{round(n):,}".replace(",", " ")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("К перечислению", fmt(m["for_pay"]))
+    c2.metric("На пэй", fmt(m["napay"]))
+    c3.metric("Чистая прибыль", fmt(m["pribyl"]), delta=f"{m['rent']*100:.1f}%")
+
+    st.divider()
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**🧮 На пэй → Чистая прибыль**")
+        def rl(label, value, color="red"):
+            r1, r2 = st.columns([3, 2])
+            r1.caption(label)
+            clr = "#185FA5" if color=="blue" else ("#A32D2D" if color=="red" else "#3B6D11")
+            r2.markdown(f"<p style='text-align:right;color:{clr};font-weight:500;'>{value}</p>", unsafe_allow_html=True)
+        rl("[авто] К перечислению", fmt(m["for_pay"]), "blue")
+        rl("[авто] Логистика WB (доставка)", f"- {fmt(m['logistic_wb'])}")
+        rl("[авто] Хранение", f"- {fmt(m['storage'])}")
+        rl("[авто] Штраф", f"- {fmt(m['penalty'])}")
+        rl("[авто] Операции на приёмке", f"- {fmt(m['priemka'])}")
+        rl(f"[авто] Возврат × 2 ({fmtN(m['vozvrat_qty'])} шт)", f"- {fmt(m['vozvrat']*2)}")
+        st.markdown(f"**На пэй: :blue[{fmt(m['napay'])}]**")
+        st.divider()
+        rl("[авто] Наш НДС", f"- {fmt(m['nash_nds'])}")
+        rl("[авто] ИПН 10%", f"- {fmt(m['ipn'])}")
+        rl("[авто] Себестоимость", f"- {fmt(m['tot_seb'])}")
+        rl("[авто] Логистика до склада", f"- {fmt(m['logistika'])}")
+        rl(f"[авто] Упаковка ({fmtN(m['tot_qty_sold'])} × 100₸)", f"- {fmt(m['upakovka'])}")
+        rl("[авто] Реклама (удержания)", f"- {fmt(m['ads'])}")
+        if role == "manager":
+            new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
+            new_buh = st.number_input("[қол] Бухгалтер (₸)", value=float(man["buhgalter"]), min_value=0.0, step=1000.0, key=f"buh_{idx}")
+            if new_samo != man["samovykup"] or new_buh != man["buhgalter"]:
+                st.session_state[man_key] = {"samovykup": new_samo, "buhgalter": new_buh}
+                st.rerun()
+        else:
+            rl("[қол] Самовыкуп", f"- {fmt(m['samovykup'])}", "plain")
+            rl("[қол] Бухгалтер", f"- {fmt(m['buhgalter'])}", "plain")
+        st.divider()
+        st.markdown(f"### Чистая прибыль: :green[{fmt(m['pribyl'])}]")
+        st.caption(f"Рентабельность: {m['rent']*100:.1f}%")
+
+    with col_right:
+        st.markdown("**🧾 Расчёт НДС и ИПН**")
+        st.markdown(f"- вб услуги: {fmt(m['vb_uslugi'])}")
+        st.caption("комиссия + возмещение ПВЗ + доставка + хранение + реклама + приёмка")
+        st.markdown(f"- вб реал тов − себ: {fmt(m['vb_real_seb'])}")
+        st.caption("реализация − доставка − себестоимость")
+        st.markdown(f"- **база для ИПН: {fmt(m['baza_ipn'])}**")
+        st.markdown(f"- ИПН 10%: :red[{fmt(m['ipn'])}]")
+        st.divider()
+        st.markdown(f"- общий НДС: {fmt(m['obsh_nds'])}")
+        st.markdown(f"- НДС поставщика: {fmt(m['nds_post'])}")
+        st.markdown(f"- НДС вб услуги: {fmt(m['nds_vb'])}")
+        st.markdown(f"- **наш НДС: :red[-{fmt(m['nash_nds'])}]**")
+        st.divider()
+        st.markdown("**📊 Продажи**")
+        st.markdown(f"- Реализация (Пр): {fmt(m['realizacia'])}")
+        st.markdown(f"- Всего продано: **{fmtN(m['total_qty'])} шт**")
+        st.markdown(f"- Возврат: :red[**{fmtN(m['vozvrat_qty'])} шт**]")
+        st.caption(f"1 шт-қа жалпы шығын: {fmt(m['per_sht'])}")
+
+    st.divider()
+
+    # Excel
+    buf = build_finance_excel(m, fin.get("by_article", {}), seb_data, logist_data, m["prod_rows"], m["log_rows"])
+    period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
+    st.download_button(f"⬇️ Скачать Excel — {store['name']} ({period_str})",
+        data=buf.getvalue(), file_name=f"Финансы_{store['name']}_{period_str}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"fin_dl_{idx}")
+
+    st.divider()
+
+    # ЧИСТАЯ ПРИБЫЛЬ ПО ТОВАРАМ
+    if m["prod_rows"]:
         with st.expander("📦 Чистая прибыль по товарам", expanded=True):
-            prod_rows = []
-            for art, data in by_article.items():
-                qty_a = data.get("qty", 0)
-                wb_a = data.get("for_pay", 0)
-                vozvrat_a = data.get("vozvrat", 0)
-                sebest_a = seb_data.get(art, 0)
-                reklama_a = ads_by_art.get(art, 0)
-                share = wb_a / for_pay if for_pay > 0 else 0
-                napay_a = wb_a - (storage*share) - (priemka*share) - (vozvrat_a*2)
-                ndv_a = napay_a * ndv_rate
-                ndvpr_a = (sebest_a * qty_a) * ndv_rate
-                ndvn_a = ndv_a - ndvpr_a
-                pack_a = qty_a * 100
-                doipn_a = napay_a - (sebest_a*qty_a)
-                ipn_a = doipn_a * 0.10 if doipn_a > 0 else 0
-                pack_a = qty_a * 100
-                ndvn_a = (napay_a * (16/116)) - ((sebest_a * qty_a) * (16/116))
-                profit_a = doipn_a - ipn_a - ndvn_a - (logistic*share) - pack_a - (samovykup*share) - reklama_a
-                pct_a = profit_a / wb_a * 100 if wb_a > 0 else 0
-                prod_rows.append({
-                    "Артикул": art,
-                    "Продано (шт)": qty_a,
-                    "WB получено (₸)": round(wb_a),
-                    "Себест/шт (₸)": sebest_a,
-                    "Реклама (₸)": reklama_a,
-                    "Чистая прибыль (₸)": round(profit_a),
-                    "%": round(pct_a, 1),
-                })
-            prod_df = pd.DataFrame(prod_rows)
-
-            def style_profit(val):
+            prod_df = pd.DataFrame(m["prod_rows"])
+            def sp(val):
                 if pd.isna(val): return ""
-                return "color: #3B6D11; font-weight: bold" if val >= 0 else "color: #A32D2D; font-weight: bold"
-
-            styled = prod_df.style.map(style_profit, subset=["Чистая прибыль (₸)", "%"])
+                return "color:#3B6D11;font-weight:bold" if val>=0 else "color:#A32D2D;font-weight:bold"
+            styled = prod_df.style.map(sp, subset=["прибыль (₸)", "%"])
             st.dataframe(styled, use_container_width=True, height=400,
                 column_config={
-                    "WB получено (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                    "Реклама (₸)": st.column_config.NumberColumn(format="%d ₸"),
-                    "Чистая прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "вб получено (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "расходы (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "себес (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "реклама (₸)": st.column_config.NumberColumn(format="%d ₸"),
+                    "прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "%": st.column_config.NumberColumn(format="%.1f%%"),
                 })
-
             if role == "manager":
                 st.divider()
                 st.caption("✏️ Реклама — введите вручную по товару")
-                ads_tbl = pd.DataFrame([
-                    {"Артикул": art, "Реклама (₸)": ads_by_art.get(art, 0)}
-                    for art in by_article.keys()
-                ])
-                ads_edited = st.data_editor(
-                    ads_tbl, use_container_width=True, height=400,
-                    key=f"ads_editor_{idx}",
+                arts_list = [r["Артикул"] for r in m["prod_rows"]]
+                ads_tbl = pd.DataFrame([{"Артикул": a, "Реклама (₸)": ads_by_art.get(a, 0)} for a in arts_list])
+                ads_edited = st.data_editor(ads_tbl, use_container_width=True, height=300, key=f"ads_editor_{idx}",
                     column_config={
                         "Артикул": st.column_config.TextColumn(disabled=True),
                         "Реклама (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
-                    }
-                )
+                    })
                 new_ads = dict(zip(ads_edited["Артикул"], ads_edited["Реклама (₸)"]))
                 if new_ads != ads_by_art:
                     st.session_state[ads_key] = new_ads
@@ -1262,40 +1230,61 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    with st.expander("🗂️ Себестоимость — по товарам", expanded=False):
-        if by_article:
-            seb_rows = []
-            for art, data in by_article.items():
-                qty_a = data.get("qty", 0)
-                sebest_a = seb_data.get(art, 0)
-                seb_rows.append({
-                    "Артикул": art,
-                    "Продано (шт)": qty_a,
-                    "Себест/шт (₸)": sebest_a,
-                    "Упаковка (₸)": qty_a * 100,
-                    "Итого (₸)": qty_a * sebest_a,
-                })
-            seb_df = pd.DataFrame(seb_rows)
+    # СЕБЕСТОИМОСТЬ + ЛОГИСТИКА ДО ВБ (қатар)
+    cL, cR = st.columns(2)
+    with cL:
+        with st.expander("🗂️ Себестоимость — по товарам", expanded=False):
+            if m["prod_rows"]:
+                seb_rows = [{"Артикул": r["Артикул"], "Продано (шт)": r["Продано (шт)"],
+                             "Себест/шт (₸)": seb_data.get(r["Артикул"], 0),
+                             "Итого (₸)": seb_data.get(r["Артикул"], 0)*r["Продано (шт)"]}
+                            for r in m["prod_rows"]]
+                seb_df = pd.DataFrame(seb_rows)
+                if role == "manager":
+                    st.caption("✏️ Себест/шт өзгертіп Enter басыңыз")
+                    edited_seb = st.data_editor(seb_df, use_container_width=True, height=350,
+                        column_config={
+                            "Артикул": st.column_config.TextColumn(disabled=True),
+                            "Продано (шт)": st.column_config.NumberColumn(format="%d шт", disabled=True),
+                            "Себест/шт (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
+                            "Итого (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
+                        })
+                    new_seb = dict(zip(edited_seb["Артикул"], edited_seb["Себест/шт (₸)"]))
+                    if new_seb != {k: seb_data.get(k, 0) for k in new_seb}:
+                        merged = dict(seb_data); merged.update(new_seb)
+                        all_seb[str(idx)] = merged
+                        save_json(SEBEST_FILE, all_seb)
+                        st.rerun()
+                else:
+                    st.dataframe(seb_df, use_container_width=True, height=350)
 
-            if role == "manager":
-                st.caption("✏️ Измените Себест/шт и нажмите Enter — всё обновится автоматически")
-                edited_seb = st.data_editor(
-                    seb_df, use_container_width=True, height=400,
-                    column_config={
-                        "Артикул": st.column_config.TextColumn(disabled=True),
-                        "Продано (шт)": st.column_config.NumberColumn(format="%d шт", disabled=True),
-                        "Себест/шт (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
-                        "Упаковка (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
-                        "Итого (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
-                    }
-                )
-                new_seb = dict(zip(edited_seb["Артикул"], edited_seb["Себест/шт (₸)"]))
-                if new_seb != seb_data:
-                    all_seb[str(idx)] = new_seb
-                    save_json(SEBEST_FILE, all_seb)
-                    st.rerun()
-            else:
-                st.dataframe(seb_df, use_container_width=True, height=400)
+    with cR:
+        with st.expander("🚚 Логистика до ВБ", expanded=False):
+            if m["log_rows"]:
+                log_df = pd.DataFrame([{"Артикул": r["Артикул"], "Продано (шт)": r["Продано (шт)"],
+                                        "Короб (₸)": r["Короб (₸)"], "Шт/короб": r["Шт/короб"],
+                                        "Итого (₸)": r["Итого (₸)"]} for r in m["log_rows"]])
+                if role == "manager":
+                    st.caption("✏️ Короб ₸ мен Шт/короб өзгертіңіз — итого авто")
+                    edited_log = st.data_editor(log_df, use_container_width=True, height=350, key=f"log_editor_{idx}",
+                        column_config={
+                            "Артикул": st.column_config.TextColumn(disabled=True),
+                            "Продано (шт)": st.column_config.NumberColumn(format="%d шт", disabled=True),
+                            "Короб (₸)": st.column_config.NumberColumn(format="%d ₸", min_value=0),
+                            "Шт/короб": st.column_config.NumberColumn(format="%d", min_value=0),
+                            "Итого (₸)": st.column_config.NumberColumn(format="%d ₸", disabled=True),
+                        })
+                    new_log = {}
+                    for _, rr in edited_log.iterrows():
+                        new_log[rr["Артикул"]] = {"box_price": int(rr["Короб (₸)"]), "box_qty": int(rr["Шт/короб"])}
+                    if new_log != {k: logist_data.get(k, {}) for k in new_log}:
+                        merged = dict(logist_data); merged.update(new_log)
+                        all_log[str(idx)] = merged
+                        save_json(LOGISTIC_FILE, all_log)
+                        st.rerun()
+                    st.caption(f"Итого → Логистика до склада: {fmt(m['logistika'])}")
+                else:
+                    st.dataframe(log_df, use_container_width=True, height=350)
 
 def show_store(store, df, sales30, filter_status, search):
     idx = store["idx"]
@@ -1331,8 +1320,7 @@ def show_store(store, df, sales30, filter_status, search):
             st.markdown("#### 📋 Таблица по дням")
             disp = sales30.copy()
             disp["Выручка (₸)"] = disp["Выручка (₸)"].round(0).astype(int)
-            st.dataframe(disp.sort_values("Дата", ascending=False).reset_index(drop=True),
-                         use_container_width=True, height=400)
+            st.dataframe(disp.sort_values("Дата", ascending=False).reset_index(drop=True), use_container_width=True, height=400)
 
     with tab_finance:
         show_finance_tab(store, df)
@@ -1361,31 +1349,27 @@ def show_store(store, df, sales30, filter_status, search):
         st.divider()
         st.markdown("#### 📊 Итоговый отчёт")
 
-        fbo_key = f"fbo_{idx}"
         all_fbo = load_json(FBO_FILE)
         fbo_data = all_fbo.get(str(idx), {})
-        st.session_state[fbo_key] = fbo_data
 
         result = dff[["supplierArticle", "qty", "in_way_client", "daily_avg", "status"]].copy()
         result["FBO в пути"] = result["supplierArticle"].map(fbo_data).fillna(0).astype(int)
         result["Общий остаток"] = result["qty"] + result["in_way_client"] + result["FBO в пути"]
         result["Оборачиваемость"] = result.apply(
-            lambda r: round(r["Общий остаток"] / r["daily_avg"]) if r["daily_avg"] > 0 else None, axis=1
-        )
+            lambda r: round(r["Общий остаток"]/r["daily_avg"]) if r["daily_avg"]>0 else None, axis=1)
         result = result.rename(columns={
             "supplierArticle": "Артикул", "qty": "Остаток",
-            "in_way_client": "В пути к клиенту", "daily_avg": "Ср. продаж/день", "status": "Статус"
-        })
+            "in_way_client": "В пути к клиенту", "daily_avg": "Ср. продаж/день", "status": "Статус"})
         result = result[["Артикул", "Остаток", "В пути к клиенту", "FBO в пути",
                          "Общий остаток", "Ср. продаж/день", "Оборачиваемость", "Статус"]]
 
         def style_turn(val):
             if pd.isna(val): return ""
-            return "background-color:#FCEBEB;color:#A32D2D;font-weight:bold" if val <= 10 else ""
+            return "background-color:#FCEBEB;color:#A32D2D;font-weight:bold" if val<=10 else ""
         def style_stat(val):
-            m = {"Ноль":"background-color:#FCEBEB;color:#A32D2D","Мало":"background-color:#FAEEDA;color:#854F0B",
-                 "Хорошо":"background-color:#EAF3DE;color:#3B6D11","Достаточно":"background-color:#E6F1FB;color:#185FA5"}
-            return m.get(val, "")
+            mm = {"Ноль":"background-color:#FCEBEB;color:#A32D2D","Мало":"background-color:#FAEEDA;color:#854F0B",
+                  "Хорошо":"background-color:#EAF3DE;color:#3B6D11","Достаточно":"background-color:#E6F1FB;color:#185FA5"}
+            return mm.get(val, "")
 
         styled = result.style.map(style_turn, subset=["Оборачиваемость"]).map(style_stat, subset=["Статус"])
         st.dataframe(styled, use_container_width=True, height=460,
@@ -1405,8 +1389,7 @@ def show_store(store, df, sales30, filter_status, search):
             result.to_excel(writer, index=False, sheet_name="Остатки WB")
         st.download_button(f"⬇️ Excel — {store['name']}", data=buf.getvalue(),
             file_name=f"WB_{store['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"dl_{idx}")
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"dl_{idx}")
 
         if role == "manager":
             st.divider()
@@ -1444,21 +1427,14 @@ with st.sidebar:
     if st.session_state.get("role", "manager") == "manager":
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
-
-        _cur_view = st.session_state.get("nav_view", "store_0")
-        _mg_on    = st.session_state.get("show_magkein", False)
-
         _store_names = [s["name"] for s in visible_stores]
         try:
             _cur_idx = int(_cur_view.split("_")[1])
         except:
             _cur_idx = 0
         _cur_store_name = visible_stores[_cur_idx]["name"] if not _mg_on and 0 <= _cur_idx < len(visible_stores) else _store_names[0]
-
         _nav_sel = st.selectbox("ВБ Кабинеты", _store_names,
-                                index=_store_names.index(_cur_store_name) if _cur_store_name in _store_names else 0,
-                                key="wb_nav_select")
-
+            index=_store_names.index(_cur_store_name) if _cur_store_name in _store_names else 0, key="wb_nav_select")
         _prev_sel = st.session_state.get("wb_prev_sel", _store_names[0])
         if _nav_sel != _prev_sel:
             st.session_state.wb_prev_sel = _nav_sel
@@ -1468,24 +1444,19 @@ with st.sidebar:
                     st.session_state.show_magkein = False
                     st.rerun()
         st.session_state.wb_prev_sel = _nav_sel
-
         st.divider()
-
         _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
         if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
             st.session_state.show_magkein = not _mg_on
             st.rerun()
-
     else:
         for _s in visible_stores:
             st.markdown(f"**{_s['name']}**")
 
     st.divider()
     search = st.text_input("🔍 Поиск по артикулу")
-    st.markdown("""
-    <div style='font-size:11px;color:#854F0B;background:#FAEEDA;padding:8px;border-radius:6px;margin-top:8px;'>
-    🔴 Красная ячейка = оборачиваемость ≤ 10 дней
-    </div>""", unsafe_allow_html=True)
+    st.markdown("""<div style='font-size:11px;color:#854F0B;background:#FAEEDA;padding:8px;border-radius:6px;margin-top:8px;'>
+    🔴 Красная ячейка = оборачиваемость ≤ 10 дней</div>""", unsafe_allow_html=True)
     if st.button("🚪 Выйти"):
         st.session_state.role = None
         st.session_state.store_access = None
@@ -1509,10 +1480,8 @@ if fetch_btn:
     st.success("✅ Все магазины загружены!")
     st.rerun()
 
-_show_magkein = (
-    st.session_state.get("role", "manager") == "manager"
-    and st.session_state.get("show_magkein", False)
-)
+_show_magkein = (st.session_state.get("role", "manager") == "manager"
+                 and st.session_state.get("show_magkein", False))
 
 if _show_magkein:
     st.markdown('## 📊 MAGKEIN — Общий финансовый отчёт')
@@ -1521,7 +1490,7 @@ if _show_magkein:
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        mg_date_from = st.date_input("Начало периода", value=date.today() - timedelta(days=7), key="mg_from")
+        mg_date_from = st.date_input("Начало периода", value=date.today()-timedelta(days=7), key="mg_from")
     with col2:
         mg_date_to = st.date_input("Конец периода", value=date.today(), key="mg_to")
     with col3:
@@ -1542,12 +1511,7 @@ if _show_magkein:
             use_key = s["finance_key"] if s["finance_key"] else s["stats_key"]
             with st.spinner(f"[{s['name']}] загружается..."):
                 try:
-                    rows = fetch_report_detail(
-                        use_key,
-                        mg_date_from.strftime("%Y-%m-%d"),
-                        mg_date_to.strftime("%Y-%m-%d"),
-                        store_name=s["name"]
-                    )
+                    rows = fetch_report_detail(use_key, mg_date_from.strftime("%Y-%m-%d"), mg_date_to.strftime("%Y-%m-%d"), store_name=s["name"])
                     fin = parse_finance(rows)
                     mg_results[s["name"]] = fin
                 except Exception as e:
@@ -1561,10 +1525,10 @@ if _show_magkein:
     else:
         mg_results = st.session_state[mg_key]
         all_seb = load_json(SEBEST_FILE)
+        all_log = load_json(LOGISTIC_FILE)
 
         def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
         def fmtN(n): return f"{round(n):,}".replace(",", " ")
-        ndv_rate = 16 / 116
 
         summary_rows = []
         total_for_pay = total_napay = total_profit = total_qty = total_vozvrat_qty = 0
@@ -1575,47 +1539,25 @@ if _show_magkein:
                 continue
             idx = s["idx"]
             seb_data = all_seb.get(str(idx), {})
-            by_article = fin.get("by_article", {})
-
-            for_pay   = fin.get("for_pay", 0)
-            ads       = fin.get("ads", 0)
-            storage   = fin.get("storage", 0)
-            priemka   = fin.get("priemka", 0)
-            penalty   = fin.get("penalty", 0)
-            logistic_auto = fin.get("logistic", 0)
-            vozvrat   = fin.get("vozvrat", 0)
-            vozvrat_qty = fin.get("vozvrat_qty", 0)
-            t_qty     = fin.get("total_qty", 0)
-            vozvrat_sh = vozvrat * 2
-
-            tot_seb   = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
-            tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
-            upakovka  = tot_qty_sold * 100
-
-            napay     = for_pay - ads - logistic_auto - storage - priemka - penalty - vozvrat_sh
-            ndv_nashe = (napay * ndv_rate) - (tot_seb * ndv_rate)
-            do_ipn    = napay - tot_seb
-            ipn       = do_ipn * 0.10 if do_ipn > 0 else 0
-            profit    = do_ipn - ipn - ndv_nashe - upakovka
-
-            man = st.session_state.get(f"fin_manual_{idx}", {"logistic": 0, "samovykup": 0, "reklama_napay": 0})
-            profit -= man["logistic"] + man["samovykup"] + man["reklama_napay"]
-
+            logist_data = all_log.get(str(idx), {})
+            man = st.session_state.get(f"fin_manual_{idx}", {"samovykup": 0, "buhgalter": 0})
+            ads_by_art = st.session_state.get(f"ads_by_art_{idx}", {})
+            m = compute_finance(fin, seb_data, logist_data, ads_by_art, man)
             summary_rows.append({
                 "Магазин": s["name"],
-                "К перечислению (₸)": round(for_pay),
-                "На пэй (₸)": round(napay),
-                "Себестоимость (₸)": round(tot_seb),
-                "Продано (шт)": t_qty,
-                "Возврат (шт)": vozvrat_qty,
-                "Чистая прибыль (₸)": round(profit),
-                "Рентабельность (%)": round(profit / for_pay * 100, 1) if for_pay > 0 else 0,
+                "К перечислению (₸)": round(m["for_pay"]),
+                "На пэй (₸)": round(m["napay"]),
+                "Себестоимость (₸)": round(m["tot_seb"]),
+                "Продано (шт)": m["total_qty"],
+                "Возврат (шт)": m["vozvrat_qty"],
+                "Чистая прибыль (₸)": round(m["pribyl"]),
+                "Рентабельность (%)": round(m["rent"]*100, 1),
             })
-            total_for_pay     += for_pay
-            total_napay       += napay
-            total_profit      += profit
-            total_qty         += t_qty
-            total_vozvrat_qty += vozvrat_qty
+            total_for_pay += m["for_pay"]
+            total_napay += m["napay"]
+            total_profit += m["pribyl"]
+            total_qty += m["total_qty"]
+            total_vozvrat_qty += m["vozvrat_qty"]
 
         if not summary_rows:
             st.warning("Нет данных")
@@ -1624,13 +1566,10 @@ if _show_magkein:
             c1.metric("💰 К перечислению", fmt(total_for_pay))
             c2.metric("📊 На пэй (жалпы)", fmt(total_napay))
             c3.metric("✅ Таза пайда (жалпы)", fmt(total_profit),
-                      delta=f"{total_profit/total_for_pay*100:.1f}%" if total_for_pay > 0 else "0%")
+                      delta=f"{total_profit/total_for_pay*100:.1f}%" if total_for_pay>0 else "0%")
             c4.metric("📦 Сатылды (жалпы)", f"{fmtN(total_qty)} шт")
-
             st.divider()
-
             st.markdown("#### 🏪 Сравнение по магазинам")
-
             summary_rows.append({
                 "Магазин": "🔷 ИТОГО (MAGKEIN)",
                 "К перечислению (₸)": round(total_for_pay),
@@ -1639,19 +1578,16 @@ if _show_magkein:
                 "Продано (шт)": total_qty,
                 "Возврат (шт)": total_vozvrat_qty,
                 "Чистая прибыль (₸)": round(total_profit),
-                "Рентабельность (%)": round(total_profit / total_for_pay * 100, 1) if total_for_pay > 0 else 0,
+                "Рентабельность (%)": round(total_profit/total_for_pay*100, 1) if total_for_pay>0 else 0,
             })
-
             mg_df = pd.DataFrame(summary_rows)
-
             def style_mg(row):
                 if row["Магазин"].startswith("🔷"):
                     return ["font-weight:bold; background-color:#E6F1FB"] * len(row)
-                profit_val = row["Чистая прибыль (₸)"]
-                if isinstance(profit_val, (int, float)) and profit_val < 0:
+                pv = row["Чистая прибыль (₸)"]
+                if isinstance(pv, (int, float)) and pv < 0:
                     return ["background-color:#FCEBEB"] * len(row)
                 return [""] * len(row)
-
             styled_mg = mg_df.style.apply(style_mg, axis=1)
             st.dataframe(styled_mg, use_container_width=True, height=200,
                 column_config={
@@ -1663,53 +1599,37 @@ if _show_magkein:
                     "Чистая прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "Рентабельность (%)": st.column_config.NumberColumn(format="%.1f%%"),
                 })
-
             st.divider()
-
             st.markdown("#### 📊 Чистая прибыль по магазинам")
             chart_df = mg_df[mg_df["Магазин"] != "🔷 ИТОГО (MAGKEIN)"][["Магазин", "Чистая прибыль (₸)"]].set_index("Магазин")
             st.bar_chart(chart_df, height=300)
 
             st.divider()
             st.markdown("#### 📦 Продажи по артикулам (все магазины)")
-
             art_combined = {}
             for s in visible_stores:
                 fin = mg_results.get(s["name"], {})
-                by_art = fin.get("by_article", {})
-                for art, data in by_art.items():
-                    if art not in art_combined:
-                        art_combined[art] = {}
-                    art_combined[art][s["name"]] = data.get("qty", 0)
-
+                for art, data in fin.get("by_article", {}).items():
+                    art_combined.setdefault(art, {})[s["name"]] = data.get("qty", 0)
             if art_combined:
                 store_names_list = [s["name"] for s in visible_stores if mg_results.get(s["name"])]
                 art_rows = []
-                for art, store_qtys in art_combined.items():
-                    total_art_qty = sum(store_qtys.values())
+                for art, sq in art_combined.items():
                     row = {"Артикул": art}
                     for sn in store_names_list:
-                        row[sn] = store_qtys.get(sn, 0)
-                    row["ИТОГО (шт)"] = total_art_qty
+                        row[sn] = sq.get(sn, 0)
+                    row["ИТОГО (шт)"] = sum(sq.values())
                     art_rows.append(row)
-
                 art_df = pd.DataFrame(art_rows).sort_values("ИТОГО (шт)", ascending=False).reset_index(drop=True)
-
                 def style_art(row):
                     if row["ИТОГО (шт)"] == art_df["ИТОГО (шт)"].max():
                         return ["background-color:#EAF3DE"] * len(row)
                     return [""] * len(row)
-
                 col_cfg = {"ИТОГО (шт)": st.column_config.NumberColumn(format="%d шт")}
                 for sn in store_names_list:
                     col_cfg[sn] = st.column_config.NumberColumn(format="%d шт")
-
-                st.dataframe(
-                    art_df.style.apply(style_art, axis=1),
-                    use_container_width=True,
-                    height=min(400, 40 + len(art_df) * 35),
-                    column_config=col_cfg
-                )
+                st.dataframe(art_df.style.apply(style_art, axis=1), use_container_width=True,
+                    height=min(400, 40+len(art_df)*35), column_config=col_cfg)
 
             st.divider()
             buf_mg = io.BytesIO()
@@ -1718,34 +1638,25 @@ if _show_magkein:
             _wb_mg = _oxl2.Workbook()
             _ws_mg = _wb_mg.active
             _ws_mg.title = "MAGKEIN отчет"
-
             headers_mg = ["Магазин", "К перечислению (₸)", "На пэй (₸)", "Себестоимость (₸)",
                           "Продано (шт)", "Возврат (шт)", "Чистая прибыль (₸)", "Рентабельность (%)"]
             for col, h in enumerate(headers_mg, 1):
                 c = _ws_mg.cell(1, col, h)
                 c.font = _Font2(bold=True)
                 c.fill = _Fill2("solid", fgColor="BDD7EE")
-
             for r_idx, row in enumerate(summary_rows, 2):
-                vals = [row[h] for h in headers_mg]
-                for col, v in enumerate(vals, 1):
-                    cell = _ws_mg.cell(r_idx, col, v)
+                for col, h in enumerate(headers_mg, 1):
+                    cell = _ws_mg.cell(r_idx, col, row[h])
                     if row["Магазин"].startswith("🔷"):
                         cell.font = _Font2(bold=True)
                         cell.fill = _Fill2("solid", fgColor="92D050")
-
-            for col_ltr in ["A","B","C","D","E","F","G","H"]:
-                _ws_mg.column_dimensions[col_ltr].width = 22
+            for cl in ["A","B","C","D","E","F","G","H"]:
+                _ws_mg.column_dimensions[cl].width = 22
             _wb_mg.save(buf_mg)
-
             period_str = f"{mg_date_from.strftime('%d.%m')}-{mg_date_to.strftime('%d.%m.%Y')}"
-            st.download_button(
-                f"⬇️ Excel — MAGKEIN ({period_str})",
-                data=buf_mg.getvalue(),
+            st.download_button(f"⬇️ Excel — MAGKEIN ({period_str})", data=buf_mg.getvalue(),
                 file_name=f"MAGKEIN_{period_str}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="mg_dl"
-            )
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="mg_dl")
 
 else:
     _nav = st.session_state.get("nav_view", "store_0")
@@ -1755,10 +1666,8 @@ else:
         _nav_idx = 0
     _nav_idx = min(_nav_idx, len(visible_stores) - 1)
     _store = visible_stores[_nav_idx]
-
     st.markdown(f"### 🏪 {_store['name']}")
     st.divider()
-
     _df_key = f"df_{_store['idx']}"
     if _df_key not in st.session_state or st.session_state[_df_key] is None:
         st.info("👈 Нажмите **«Загрузить все»**")
