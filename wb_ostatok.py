@@ -990,13 +990,15 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
     nash_nds    = obsh_nds - nds_post - nds_vb
 
     # ── 2-ТАБЛИЦА (На пэй / Прибыль) ──
-    napay  = for_pay - logistic_wb - storage - penalty - priemka - vozvrat * 2
+    # На пэй-ден реклама (удержания) да шегеріледі — WB-ден нақты қолға тиетін сома
+    napay  = for_pay - logistic_wb - storage - penalty - priemka - vozvrat * 2 - ads
+    # Реклама на пэйде шегерілген, сондықтан прибыльден ҚАЙТА алмаймыз (екі рет болмас үшін)
     pribyl = (napay - nash_nds - ipn - tot_seb
-              - logistika - upakovka - ads - samovykup - buhgalter)
+              - logistika - upakovka - samovykup - buhgalter)
     rent   = pribyl / napay if napay else 0
 
     # ── ТАУАР БОЙЫНША (per-шт есеп) ──
-    # 1 шт-қа кететін жалпы шығын
+    # 1 шт-қа кететін жалпы шығын (рекламасыз — реклама тауарда жеке есептеледі)
     obshie = (logistic_wb + storage + penalty + priemka + vozvrat*2
               + nash_nds + ipn + buhgalter + samovykup)
     per_sht = obshie / total_qty if total_qty else 0
@@ -1021,8 +1023,11 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
         rashody = upak_a + logist_a
         # себес
         seb_tot_a = seb_per * qty_a
-        # реклама (қолмен)
-        reklama_a = ads_by_art.get(art, 0)
+        # реклама: қолмен берілсе сол, әйтпесе жалпы рекламадан үлеспен (for_pay бойынша)
+        if art in ads_by_art:
+            reklama_a = ads_by_art.get(art, 0)
+        else:
+            reklama_a = ads * (fp_a / for_pay) if for_pay else 0
         # прибыль
         profit_a = vb_poluch - rashody - seb_tot_a - reklama_a
         pct_a = profit_a / vb_poluch * 100 if vb_poluch else 0
