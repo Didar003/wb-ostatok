@@ -133,6 +133,16 @@ def check_password():
                 st.session_state.store_access = None
                 st.rerun()
                 return True
+            # SUBMANAGER — бірнеше ИП көретін қосымша менеджер
+            for i in range(1, 21):
+                sub_pwd = st.secrets.get(f"SUBMANAGER_{i}_PASSWORD", "")
+                if sub_pwd and pwd == sub_pwd:
+                    stores_str = st.secrets.get(f"SUBMANAGER_{i}_STORES", "")
+                    allowed = [int(x.strip()) for x in stores_str.split(",") if x.strip().isdigit()]
+                    st.session_state.role = "submanager"
+                    st.session_state.store_access = allowed
+                    st.rerun()
+                    return True
             stores_str = st.secrets.get("STORE_NAMES", "")
             store_names = [n.strip() for n in stores_str.split(",") if n.strip()]
             for i, name in enumerate(store_names, 1):
@@ -1164,7 +1174,7 @@ def show_finance_tab(store, df):
         rl("[авто] Логистика до склада", f"- {fmt(m['logistika'])}")
         rl(f"[авто] Упаковка ({fmtN(m['tot_qty_sold'])} × {m['upak_price']:.0f}₸)", f"- {fmt(m['upakovka'])}")
         rl("[авто] Реклама (удержания)", f"- {fmt(m['ads'])}")
-        if role == "manager":
+        if role in ("manager", "submanager"):
             new_upak = st.number_input("[қол] Упаковка 1 шт (₸)", value=float(man.get("upak_price", 100)), min_value=0.0, step=5.0, key=f"upak_{idx}",
                                        help="Әр ИП-де упаковка бағасы әртүрлі — 1 данаға қанша төлейтініңізді жазыңыз")
             new_samo = st.number_input("[қол] Самовыкуп (₸)", value=float(man["samovykup"]), min_value=0.0, step=1000.0, key=f"samo_{idx}")
@@ -1232,7 +1242,7 @@ def show_finance_tab(store, df):
                     "прибыль (₸)": st.column_config.NumberColumn(format="%d ₸"),
                     "%": st.column_config.NumberColumn(format="%.1f%%"),
                 })
-            if role == "manager":
+            if role in ("manager", "submanager"):
                 st.divider()
                 st.caption("✏️ Реклама — введите вручную по товару")
                 arts_list = [r["Артикул"] for r in m["prod_rows"]]
@@ -1259,7 +1269,7 @@ def show_finance_tab(store, df):
                              "Итого (₸)": seb_data.get(r["Артикул"], 0)*r["Продано (шт)"]}
                             for r in m["prod_rows"]]
                 seb_df = pd.DataFrame(seb_rows)
-                if role == "manager":
+                if role in ("manager", "submanager"):
                     st.caption("✏️ Себест/шт өзгертіп Enter басыңыз")
                     edited_seb = st.data_editor(seb_df, use_container_width=True, height=350,
                         column_config={
@@ -1283,7 +1293,7 @@ def show_finance_tab(store, df):
                 log_df = pd.DataFrame([{"Артикул": r["Артикул"], "Продано (шт)": r["Продано (шт)"],
                                         "Короб (₸)": r["Короб (₸)"], "Шт/короб": r["Шт/короб"],
                                         "Итого (₸)": r["Итого (₸)"]} for r in m["log_rows"]])
-                if role == "manager":
+                if role in ("manager", "submanager"):
                     st.caption("✏️ Короб ₸ мен Шт/короб өзгертіңіз — итого авто")
                     edited_log = st.data_editor(log_df, use_container_width=True, height=350, key=f"log_editor_{idx}",
                         column_config={
@@ -1410,7 +1420,7 @@ def show_store(store, df, sales30, filter_status, search):
             file_name=f"WB_{store['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"dl_{idx}")
 
-        if role == "manager":
+        if role in ("manager", "submanager"):
             st.divider()
             st.markdown("#### ✏️ FBO в пути")
             fbo_tbl = dff[["supplierArticle"]].copy()
@@ -1433,6 +1443,8 @@ _role = st.session_state.get("role", "manager")
 _store_access = st.session_state.get("store_access", None)
 if _role == "owner" and _store_access:
     visible_stores = [s for s in stores if s["idx"] == _store_access]
+elif _role == "submanager" and _store_access:
+    visible_stores = [s for s in stores if s["idx"] in _store_access]
 else:
     visible_stores = stores
 
@@ -1443,7 +1455,8 @@ with st.sidebar:
     fetch_btn = st.button("🔄 Загрузить все", use_container_width=True)
     st.divider()
 
-    if st.session_state.get("role", "manager") == "manager":
+    _role_now = st.session_state.get("role", "manager")
+    if _role_now in ("manager", "submanager"):
         _cur_view = st.session_state.get("nav_view", "store_0")
         _mg_on = st.session_state.get("show_magkein", False)
         _store_names = [s["name"] for s in visible_stores]
@@ -1463,11 +1476,13 @@ with st.sidebar:
                     st.session_state.show_magkein = False
                     st.rerun()
         st.session_state.wb_prev_sel = _nav_sel
-        st.divider()
-        _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
-        if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
-            st.session_state.show_magkein = not _mg_on
-            st.rerun()
+        # MAGKEIN тек басты менеджерге
+        if _role_now == "manager":
+            st.divider()
+            _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
+            if st.button(_mg_label, key="mg_toggle_btn", use_container_width=True):
+                st.session_state.show_magkein = not _mg_on
+                st.rerun()
     else:
         for _s in visible_stores:
             st.markdown(f"**{_s['name']}**")
