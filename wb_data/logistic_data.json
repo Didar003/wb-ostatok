@@ -72,5 +72,15 @@
       "box_price": 16000,
       "box_qty": 250
     }
+  },
+  "6": {
+    "345 крем": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "мист dr. althea": {
+      "box_price": 16000,
+      "box_qty": 0
+    }
   }
 }
