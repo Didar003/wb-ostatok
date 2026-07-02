@@ -343,11 +343,13 @@ def parse_finance(rows):
                 result["by_article"][article]["for_pay"] += ppvz
                 result["by_article"][article]["realizacia"] += retail
         elif oper_up == "ВОЗВРАТ":
+            result["for_pay"] += ppvz          # К перечислению-ге возврат сомасы да қосылады (Excel Общий итог)
             result["vozvrat"] += abs(ppvz)
             result["vozvrat_qty"] += qty
             result["komissiya"] += abs(acquiring)
             result["vozmesh_pvz"] += abs(rebill)
             if article and article in result["by_article"]:
+                result["by_article"][article]["for_pay"] += ppvz
                 result["by_article"][article]["vozvrat"] += abs(ppvz)
         elif oper_up == "ЛОГИСТИКА" or "ДОСТАВК" in oper_up:
             result["logistic"] += abs(delivery_rub)
