@@ -675,28 +675,29 @@ def show_sales_returns_tab(store):
     if load_sr:
         with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                # WB финанс отчет сату күнінен 1 күн КЕЙІН қалыптасады (Дата формирования).
-                # Сондықтан dateFrom/dateTo-ны кең аламыз да, sale_dt бойынша сүземіз.
+                # WB финанс отчет rr_dt (расчёт) күні бойынша сүзеді, сату күнінен кейін.
+                # Кең период: 3 күн артқа, 5 күн алға
                 target = sel_date.strftime("%Y-%m-%d")
-                d_from = sel_date.strftime("%Y-%m-%d")
+                d_from = (sel_date - timedelta(days=3)).strftime("%Y-%m-%d")
                 d_to = (sel_date + timedelta(days=5)).strftime("%Y-%m-%d")
                 wide = fetch_report_detail(use_key, d_from, d_to, store_name=name)
-                # сату күні бойынша сүзу (sale_dt басты, болмаса rr_dt)
-                rows_sale = [r for r in (wide or []) if str(r.get("sale_dt", "") or "")[:10] == target]
-                rows_rr = [r for r in (wide or []) if str(r.get("rr_dt", "") or "")[:10] == target]
-                # sale_dt басым; ол бос болса rr_dt
-                rows = rows_sale if rows_sale else rows_rr
+
+                # sale_dt (сату күні) бойынша сүзу
+                rows = [r for r in (wide or []) if str(r.get("sale_dt", "") or "")[:10] == target]
                 st.session_state[sr_key] = rows or []
                 if rows:
                     st.success(f"✅ Загружено! ({len(rows)} операций)")
                 else:
-                    # диагностика: қандай sale_dt бар
-                    sample = sorted(set(str(r.get("sale_dt","") or "")[:10] for r in (wide or []) if r.get("sale_dt")))
                     st.warning(f"⚠️ {target} күні деректер табылмады.")
-                    if sample:
-                        st.caption(f"🔍 Қолжетімді sale_dt (үлгі): {', '.join(sample[:10])}")
+                    # толық диагностика — бірінші жолдың барлық өрісі
+                    if wide:
+                        first = wide[0]
+                        date_fields = {k: v for k, v in first.items() if "dt" in k.lower() or "date" in k.lower()}
+                        st.caption(f"🔍 {len(wide)} операция бар. Күн өрістері: {date_fields}")
+                        sale_dts = sorted(set(str(r.get("sale_dt","") or "")[:10] for r in wide if r.get("sale_dt")))
+                        st.caption(f"🔍 Барлық sale_dt: {sale_dts}")
                     else:
-                        st.caption(f"🔍 Кең периодта {len(wide or [])} операция, бірақ sale_dt өрісі бос. Финанс отчёт әлі қалыптаспаған болуы мүмкін.")
+                        st.caption(f"🔍 {d_from}→{d_to} аралығында reportDetailByPeriod 0 операция қайтарды (расчёт әлі жоқ).")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
 
