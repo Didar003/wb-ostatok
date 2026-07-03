@@ -722,7 +722,7 @@ def show_sales_returns_tab(store):
         sr_rows.append({
             "Артикул продавца": sa,
             "Артикул WB": str(d["nm"] or ""),
-            "Выручка (₸)": round(d["revenue"], 2),
+            "Продажа (₸)": round(d["revenue"], 2),
             "Продано (шт)": d["sold"],
             "Возврат (шт)": d["vozvrat"],
             "Итого (шт)": d["sold"] - d["vozvrat"],
@@ -734,12 +734,12 @@ def show_sales_returns_tab(store):
     sr_df = pd.DataFrame(sr_rows).sort_values("Продано (шт)", ascending=False).reset_index(drop=True)
     total_sold = sr_df["Продано (шт)"].sum()
     total_vq = sr_df["Возврат (шт)"].sum()
-    total_rev = sr_df["Выручка (₸)"].sum()
+    total_rev = sr_df["Продажа (₸)"].sum()
 
     c1, c2, c3 = st.columns(3)
     c1.metric("📦 Продано", f"{int(total_sold):,} шт".replace(",", " "))
     c2.metric("↩️ Возврат", f"{int(total_vq):,} шт".replace(",", " "))
-    c3.metric("💰 Выручка", f"{total_rev:,.2f} ₸".replace(",", " "))
+    c3.metric("💰 Продажа", f"{total_rev:,.2f} ₸".replace(",", " "))
     st.caption(f"📅 {sel_date.strftime('%d.%m.%Y')} күнгі есеп")
     st.divider()
 
@@ -749,7 +749,7 @@ def show_sales_returns_tab(store):
         return "color:#A32D2D;font-weight:bold"
     styled_sr = sr_df.style.map(style_vozvrat, subset=["Возврат (шт)"])
     st.dataframe(styled_sr, use_container_width=True, height=460,
-        column_config={"Выручка (₸)": st.column_config.NumberColumn(format="%.2f ₸")})
+        column_config={"Продажа (₸)": st.column_config.NumberColumn(format="%.2f ₸")})
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
