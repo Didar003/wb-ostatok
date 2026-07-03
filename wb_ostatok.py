@@ -675,80 +675,50 @@ def show_sales_returns_tab(store):
     if load_sr:
         with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                d = sel_date.strftime("%Y-%m-%d")
-                # 1-қадам: дәл сол күн
-                rows_exact = fetch_report_detail(use_key, d, d, store_name=name)
-                st.caption(f"🔍 1-қадам (дәл {d}): {len(rows_exact or [])} операция")
-
-                # 2-қадам: кең период (30 күн артқа + 14 алға), сату күні бойынша сүзу
-                d_from = (sel_date - timedelta(days=2)).strftime("%Y-%m-%d")
-                d_to = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
-                wide = fetch_report_detail(use_key, d_from, d_to, store_name=name)
-                st.caption(f"🔍 2-қадам (кең {d_from}→{d_to}): {len(wide or [])} операция")
-
-                if wide:
-                    # қандай күн өрістері бар — үлгі
-                    sample = set()
-                    for r in wide[:300]:
-                        for k in ("sale_dt", "rr_dt", "order_dt", "date_from", "date_to"):
-                            v = str(r.get(k, "") or "")[:10]
-                            if v:
-                                sample.add(f"{k}={v}")
-                    st.caption(f"🔍 Күн өрістері (үлгі): {', '.join(sorted(sample)[:12])}")
-
-                target = d
-                rows = []
-                for r in (wide or []):
-                    dts = [str(r.get(k, "") or "")[:10] for k in ("sale_dt", "rr_dt", "order_dt")]
-                    if target in dts:
-                        rows.append(r)
-                st.caption(f"🔍 3-қадам ({target} сүзгіден кейін): {len(rows)} операция")
-
-                # дәл күн бос болмаса, соны қолданамыз
-                final = rows_exact if rows_exact else rows
-                st.session_state[sr_key] = final or []
-                if final:
-                    st.success(f"✅ Загружено! ({len(final)} операций)")
+                # sales API — нақты сату/возврат күнін дәл береді (flag=1: тек осы күн)
+                date_from = sel_date.strftime("%Y-%m-%dT00:00:00")
+                raw = wb_get_retry(
+                    "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
+                    stats_key, {"dateFrom": date_from, "flag": 1}, store_name=name
+                )
+                st.session_state[sr_key] = raw or []
+                if raw:
+                    st.success(f"✅ Загружено! ({len(raw)} операций)")
                 else:
-                    st.warning("⚠️ Бұл күнге дерек табылмады (жоғарыдағы диагностиканы қараңыз)")
-            except Exception as e:
-                st.error(f"Ошибка: {e}")
-            except Exception as e:
-                st.error(f"Ошибка: {e}")
+                    st.warning("Бұл күні сатылым жоқ")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
 
     raw = st.session_state.get(sr_key)
     if raw is None:
         st.info("👆 Күнді таңдап **«Загрузить день»** басыңыз")
-        st.caption("Финанс API — дәл реализация сомасы (тиынына дейін)")
+        st.caption("Sales API — нақты сату күні (flag=1)")
         return
 
     if not raw:
         st.warning("Бұл күні деректер жоқ")
         return
 
-    # финанс API-ды артикул бойынша жинау
+    # sales API-ды артикул бойынша жинау (saleID: R=возврат, S=продажа)
     agg = {}
     for row in raw:
-        oper = str(row.get("supplier_oper_name", "")).strip().upper()
-        sa = str(row.get("sa_name", "") or "").strip()
-        nm = row.get("nm_id", "") or row.get("nmId", "") or ""
-        qty = int(row.get("quantity", 0) or 0)
-        retail = float(row.get("retail_amount", 0) or 0)   # Вайлдберриз реализовал Товар (Пр)
-        ppvz = float(row.get("ppvz_for_pay", 0) or 0)
+        sa = str(row.get("supplierArticle", "") or "").strip()
+        nm = row.get("nmId", "") or ""
+        sale_id = str(row.get("saleID", "") or "")
+        # реализация сомасы: priceWithDisc (сатып алушы төлеген, скидкамен)
+        price = float(row.get("priceWithDisc", 0) or 0)
         if not sa:
             continue
         if sa not in agg:
             agg[sa] = {"sa": sa, "nm": nm, "sold": 0, "vozvrat": 0, "revenue": 0.0, "vozvrat_sum": 0.0}
         if not agg[sa]["nm"]:
             agg[sa]["nm"] = nm
-        if oper in ("ПРОДАЖА", "ДОБРОВОЛЬНАЯ КОМПЕНСАЦИЯ ПРИ ВОЗВРАТЕ"):
-            agg[sa]["sold"] += qty
-            agg[sa]["revenue"] += retail
-        elif oper == "ВОЗВРАТ":
-            agg[sa]["vozvrat"] += qty
-            agg[sa]["vozvrat_sum"] += abs(retail)
+        if sale_id.startswith("R"):
+            agg[sa]["vozvrat"] += 1
+            agg[sa]["vozvrat_sum"] += abs(price)
+        else:
+            agg[sa]["sold"] += 1
+            agg[sa]["revenue"] += price
 
     sr_rows = []
     for sa, d in agg.items():
