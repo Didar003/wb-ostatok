@@ -675,11 +675,37 @@ def show_sales_returns_tab(store):
     if load_sr:
         with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                # финанс API (reportDetailByPeriod) — дәл сома (Вайлдберриз реализовал Товар)
+                # финанс API: алдымен дәл сол күнді сұраймыз (финанс таб солай жұмыс істейді)
                 d = sel_date.strftime("%Y-%m-%d")
                 rows = fetch_report_detail(use_key, d, d, store_name=name)
+                # егер бос болса — периодты кеңейтіп, сату күні бойынша сүземіз
+                if not rows:
+                    d_to = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
+                    wide = fetch_report_detail(use_key, d, d_to, store_name=name)
+                    target = sel_date.strftime("%Y-%m-%d")
+                    rows = []
+                    for r in (wide or []):
+                        dts = [str(r.get(k, "") or "")[:10] for k in ("sale_dt", "rr_dt", "order_dt")]
+                        if target in dts:
+                            rows.append(r)
                 st.session_state[sr_key] = rows or []
-                st.success("✅ Загружено!")
+                if rows:
+                    st.success(f"✅ Загружено! ({len(rows)} операций)")
+                else:
+                    st.warning("⚠️ Бұл күнге финанс API дерек қайтармады. Финанс отчёт кейде 1-3 күн кейін дайын болады. Басқа күнді таңдап көріңіз.")
+                    # Диагностика: кең периодта дерек бар ма?
+                    d_check = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
+                    check = fetch_report_detail(use_key, d, d_check, store_name=name)
+                    if check:
+                        sample_dts = set()
+                        for r in check[:500]:
+                            for k in ("sale_dt", "rr_dt", "order_dt"):
+                                v = str(r.get(k, "") or "")[:10]
+                                if v:
+                                    sample_dts.add(f"{k}={v}")
+                        st.caption(f"🔍 Кең периодта {len(check)} операция бар. Күн өрістері (үлгі): {', '.join(sorted(sample_dts)[:10])}")
+            except Exception as e:
+                st.error(f"Ошибка: {e}")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
 
