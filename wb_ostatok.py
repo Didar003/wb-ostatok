@@ -652,6 +652,7 @@ def render_stars(rating):
 def show_sales_returns_tab(store):
     idx = store["idx"]
     stats_key = store["stats_key"]
+    finance_key = store["finance_key"]
     name = store["name"]
 
     st.markdown("#### 🛒 Ежедневный отчёт — продажи и возвраты")
@@ -665,21 +666,19 @@ def show_sales_returns_tab(store):
     sr_key = f"sales_day_{idx}"
     day_key = f"sr_day_{idx}"
     cur_day = str(sel_date)
+    use_key = finance_key if finance_key else stats_key
     if st.session_state.get(day_key) != cur_day:
         if sr_key in st.session_state:
             del st.session_state[sr_key]
         st.session_state[day_key] = cur_day
 
     if load_sr:
-        with st.spinner(f"[{name}] {sel_date} күнгі сатылым..."):
+        with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                # sales API — нақты сату/возврат күнін береді
-                date_from = sel_date.strftime("%Y-%m-%dT00:00:00")
-                raw = wb_get_retry(
-                    "https://statistics-api.wildberries.ru/api/v1/supplier/sales",
-                    stats_key, {"dateFrom": date_from, "flag": 1}, store_name=name
-                )
-                st.session_state[sr_key] = raw or []
+                # финанс API (reportDetailByPeriod) — дәл сома (Вайлдберриз реализовал Товар)
+                d = sel_date.strftime("%Y-%m-%d")
+                rows = fetch_report_detail(use_key, d, d, store_name=name)
+                st.session_state[sr_key] = rows or []
                 st.success("✅ Загружено!")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
@@ -687,34 +686,34 @@ def show_sales_returns_tab(store):
     raw = st.session_state.get(sr_key)
     if raw is None:
         st.info("👆 Күнді таңдап **«Загрузить день»** басыңыз")
-        st.caption("flag=1: тек таңдалған күннің деректері келеді")
+        st.caption("Финанс API — дәл реализация сомасы (тиынына дейін)")
         return
 
     if not raw:
         st.warning("Бұл күні деректер жоқ")
         return
 
-    # sales API-ды артикул бойынша жинау
-    # saleID "R"-мен басталса — возврат, "S" — продажа
+    # финанс API-ды артикул бойынша жинау
     agg = {}
     for row in raw:
-        sa = str(row.get("supplierArticle", "") or "").strip()
-        nm = row.get("nmId", "") or ""
-        sale_id = str(row.get("saleID", "") or "")
-        price = float(row.get("priceWithDisc", 0) or 0)
-        for_pay = float(row.get("forPay", 0) or 0)
+        oper = str(row.get("supplier_oper_name", "")).strip().upper()
+        sa = str(row.get("sa_name", "") or "").strip()
+        nm = row.get("nm_id", "") or row.get("nmId", "") or ""
+        qty = int(row.get("quantity", 0) or 0)
+        retail = float(row.get("retail_amount", 0) or 0)   # Вайлдберриз реализовал Товар (Пр)
+        ppvz = float(row.get("ppvz_for_pay", 0) or 0)
         if not sa:
             continue
         if sa not in agg:
-            agg[sa] = {"sa": sa, "nm": nm, "sold": 0, "vozvrat": 0, "revenue": 0, "vozvrat_sum": 0}
+            agg[sa] = {"sa": sa, "nm": nm, "sold": 0, "vozvrat": 0, "revenue": 0.0, "vozvrat_sum": 0.0}
         if not agg[sa]["nm"]:
             agg[sa]["nm"] = nm
-        if sale_id.startswith("R"):
-            agg[sa]["vozvrat"] += 1
-            agg[sa]["vozvrat_sum"] += abs(price)
-        else:
-            agg[sa]["sold"] += 1
-            agg[sa]["revenue"] += price
+        if oper in ("ПРОДАЖА", "ДОБРОВОЛЬНАЯ КОМПЕНСАЦИЯ ПРИ ВОЗВРАТЕ"):
+            agg[sa]["sold"] += qty
+            agg[sa]["revenue"] += retail
+        elif oper == "ВОЗВРАТ":
+            agg[sa]["vozvrat"] += qty
+            agg[sa]["vozvrat_sum"] += abs(retail)
 
     sr_rows = []
     for sa, d in agg.items():
@@ -723,9 +722,9 @@ def show_sales_returns_tab(store):
         sr_rows.append({
             "Артикул продавца": sa,
             "Артикул WB": str(d["nm"] or ""),
+            "Выручка (₸)": round(d["revenue"], 2),
             "Продано (шт)": d["sold"],
             "Возврат (шт)": d["vozvrat"],
-            "Выручка (₸)": round(d["revenue"]),
             "Итого (шт)": d["sold"] - d["vozvrat"],
         })
     if not sr_rows:
@@ -740,7 +739,7 @@ def show_sales_returns_tab(store):
     c1, c2, c3 = st.columns(3)
     c1.metric("📦 Продано", f"{int(total_sold):,} шт".replace(",", " "))
     c2.metric("↩️ Возврат", f"{int(total_vq):,} шт".replace(",", " "))
-    c3.metric("💰 Выручка", f"{int(total_rev):,} ₸".replace(",", " "))
+    c3.metric("💰 Выручка", f"{total_rev:,.2f} ₸".replace(",", " "))
     st.caption(f"📅 {sel_date.strftime('%d.%m.%Y')} күнгі есеп")
     st.divider()
 
@@ -750,7 +749,7 @@ def show_sales_returns_tab(store):
         return "color:#A32D2D;font-weight:bold"
     styled_sr = sr_df.style.map(style_vozvrat, subset=["Возврат (шт)"])
     st.dataframe(styled_sr, use_container_width=True, height=460,
-        column_config={"Выручка (₸)": st.column_config.NumberColumn(format="%d ₸")})
+        column_config={"Выручка (₸)": st.column_config.NumberColumn(format="%.2f ₸")})
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
