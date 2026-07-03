@@ -675,35 +675,44 @@ def show_sales_returns_tab(store):
     if load_sr:
         with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                # финанс API: алдымен дәл сол күнді сұраймыз (финанс таб солай жұмыс істейді)
                 d = sel_date.strftime("%Y-%m-%d")
-                rows = fetch_report_detail(use_key, d, d, store_name=name)
-                # егер бос болса — периодты кеңейтіп, сату күні бойынша сүземіз
-                if not rows:
-                    d_to = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
-                    wide = fetch_report_detail(use_key, d, d_to, store_name=name)
-                    target = sel_date.strftime("%Y-%m-%d")
-                    rows = []
-                    for r in (wide or []):
-                        dts = [str(r.get(k, "") or "")[:10] for k in ("sale_dt", "rr_dt", "order_dt")]
-                        if target in dts:
-                            rows.append(r)
-                st.session_state[sr_key] = rows or []
-                if rows:
-                    st.success(f"✅ Загружено! ({len(rows)} операций)")
+                # 1-қадам: дәл сол күн
+                rows_exact = fetch_report_detail(use_key, d, d, store_name=name)
+                st.caption(f"🔍 1-қадам (дәл {d}): {len(rows_exact or [])} операция")
+
+                # 2-қадам: кең период (30 күн артқа + 14 алға), сату күні бойынша сүзу
+                d_from = (sel_date - timedelta(days=2)).strftime("%Y-%m-%d")
+                d_to = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
+                wide = fetch_report_detail(use_key, d_from, d_to, store_name=name)
+                st.caption(f"🔍 2-қадам (кең {d_from}→{d_to}): {len(wide or [])} операция")
+
+                if wide:
+                    # қандай күн өрістері бар — үлгі
+                    sample = set()
+                    for r in wide[:300]:
+                        for k in ("sale_dt", "rr_dt", "order_dt", "date_from", "date_to"):
+                            v = str(r.get(k, "") or "")[:10]
+                            if v:
+                                sample.add(f"{k}={v}")
+                    st.caption(f"🔍 Күн өрістері (үлгі): {', '.join(sorted(sample)[:12])}")
+
+                target = d
+                rows = []
+                for r in (wide or []):
+                    dts = [str(r.get(k, "") or "")[:10] for k in ("sale_dt", "rr_dt", "order_dt")]
+                    if target in dts:
+                        rows.append(r)
+                st.caption(f"🔍 3-қадам ({target} сүзгіден кейін): {len(rows)} операция")
+
+                # дәл күн бос болмаса, соны қолданамыз
+                final = rows_exact if rows_exact else rows
+                st.session_state[sr_key] = final or []
+                if final:
+                    st.success(f"✅ Загружено! ({len(final)} операций)")
                 else:
-                    st.warning("⚠️ Бұл күнге финанс API дерек қайтармады. Финанс отчёт кейде 1-3 күн кейін дайын болады. Басқа күнді таңдап көріңіз.")
-                    # Диагностика: кең периодта дерек бар ма?
-                    d_check = (sel_date + timedelta(days=14)).strftime("%Y-%m-%d")
-                    check = fetch_report_detail(use_key, d, d_check, store_name=name)
-                    if check:
-                        sample_dts = set()
-                        for r in check[:500]:
-                            for k in ("sale_dt", "rr_dt", "order_dt"):
-                                v = str(r.get(k, "") or "")[:10]
-                                if v:
-                                    sample_dts.add(f"{k}={v}")
-                        st.caption(f"🔍 Кең периодта {len(check)} операция бар. Күн өрістері (үлгі): {', '.join(sorted(sample_dts)[:10])}")
+                    st.warning("⚠️ Бұл күнге дерек табылмады (жоғарыдағы диагностиканы қараңыз)")
+            except Exception as e:
+                st.error(f"Ошибка: {e}")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
             except Exception as e:
