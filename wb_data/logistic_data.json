@@ -206,5 +206,35 @@
       "box_price": 16000,
       "box_qty": 0
     }
+  },
+  "3": {
+    "крем барьерный": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax крем-бустер": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax ретинол-шот": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "pdrn essence stick balm": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "round lap spf": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "pdrn 100 vt reedle": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "vt крем для век": {
+      "box_price": 16000,
+      "box_qty": 0
+    }
   }
 }
