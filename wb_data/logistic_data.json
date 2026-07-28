@@ -152,5 +152,59 @@
       "box_price": 16000,
       "box_qty": 0
     }
+  },
+  "5": {
+    "spf stick": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "крем спф селимакс желтый": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "2222222222": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "тонер кремовый": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "кремb3": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax крем-бустер": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax ретинол шот": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "капсула зеленая": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "себум спф": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "капсула розовая": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "розовый спф": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax spf барьерный": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "жасыл спф": {
+      "box_price": 16000,
+      "box_qty": 0
+    }
   }
 }
