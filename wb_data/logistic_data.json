@@ -90,5 +90,67 @@
       "box_price": 16000,
       "box_qty": 75
     }
+  },
+  "4": {
+    "спф 50 round lab": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "для лица axis-y": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "для глаз axis-y": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "тонер axis-y": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "раунд лаб стик спф": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "тонер кремовый старый": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "axis-y spf": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "skin1004 спф сыворотка": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "крем axis-y": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax крем-бустер": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "аксис освет.крем": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "axis-y пенка": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax ретинол набор": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "крем спф селимакс желтый": {
+      "box_price": 16000,
+      "box_qty": 0
+    },
+    "celimax ретинол-шот": {
+      "box_price": 16000,
+      "box_qty": 0
+    }
   }
 }
