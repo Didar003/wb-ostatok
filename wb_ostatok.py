@@ -11,6 +11,7 @@ import base64
 import zipfile
 import hashlib
 from PIL import Image
+from pypdf import PdfReader, PdfWriter
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
@@ -770,6 +771,32 @@ def stickers_to_zip_by_cell(stickers, orders_by_id, cell_map, propusk_bytes=None
     return buf, unmatched
 
 
+def merge_documents_to_pdf(sticker_png_bytes_list, propusk_bytes=None, list_bytes=None):
+    """Стикерлерді (PNG) + пропуск PDF + лист подбора PDF — барлығын бір PDF файлға біріктіреді."""
+    writer = PdfWriter()
+
+    if sticker_png_bytes_list:
+        images = [Image.open(io.BytesIO(b)).convert("RGB") for b in sticker_png_bytes_list]
+        sticker_pdf_buf = io.BytesIO()
+        images[0].save(sticker_pdf_buf, format="PDF", save_all=True, append_images=images[1:])
+        sticker_pdf_buf.seek(0)
+        for page in PdfReader(sticker_pdf_buf).pages:
+            writer.add_page(page)
+
+    if propusk_bytes:
+        for page in PdfReader(io.BytesIO(propusk_bytes)).pages:
+            writer.add_page(page)
+
+    if list_bytes:
+        for page in PdfReader(io.BytesIO(list_bytes)).pages:
+            writer.add_page(page)
+
+    out_buf = io.BytesIO()
+    writer.write(out_buf)
+    out_buf.seek(0)
+    return out_buf
+
+
 def show_cell_map_editor(store):
     """Баркод → Ячейка → ИП картасын қолмен енгізу кестесі."""
     idx = store["idx"]
@@ -1223,7 +1250,40 @@ def show_fbs_tab(store):
                                 except Exception:
                                     pass
                         st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(300, 45+len(rows)*35))
-                    st.divider()
+
+                        pc1, pc2, pc3 = st.columns([1, 1, 1])
+                        with pc1:
+                            propusk_file_d = st.file_uploader("Пропуск PDF", type=["pdf"], key=f"deliv_propusk_{idx}_{sid}")
+                        with pc2:
+                            list_file_d = st.file_uploader("Лист подбора PDF", type=["pdf"], key=f"deliv_list_{idx}_{sid}")
+                        with pc3:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            merge_btn = st.button("📄 3 құжатты біріктіріп жүктеу", key=f"deliv_merge_btn_{idx}_{sid}", use_container_width=True)
+
+                        if merge_btn:
+                            with st.spinner("Стикерлер алынып, құжаттар біріктірілуде..."):
+                                try:
+                                    order_ids_for_supply = [o.get("id") for o in orders_in_supply]
+                                    stickers_d = fetch_order_stickers(mp_key, order_ids_for_supply, sticker_type="png")
+                                    sticker_bytes_list = [base64.b64decode(s["file"]) for s in stickers_d if s.get("file")]
+                                    propusk_bytes_d = propusk_file_d.read() if propusk_file_d else None
+                                    list_bytes_d = list_file_d.read() if list_file_d else None
+                                    merged_buf = merge_documents_to_pdf(sticker_bytes_list, propusk_bytes_d, list_bytes_d)
+                                    st.session_state[f"deliv_merged_pdf_{idx}_{sid}"] = merged_buf.getvalue()
+                                    st.success("✅ Құжаттар біріктірілді")
+                                except Exception as e:
+                                    st.error(f"Қате: {e}")
+
+                        merged_pdf_data = st.session_state.get(f"deliv_merged_pdf_{idx}_{sid}")
+                        if merged_pdf_data:
+                            st.download_button(
+                                "⬇️ Біріктірілген PDF жүктеу",
+                                data=merged_pdf_data,
+                                file_name=f"{sid}_3_kujat.pdf",
+                                mime="application/pdf",
+                                key=f"deliv_merged_dl_{idx}_{sid}",
+                            )
+                        st.divider()
 
 
     # ---------- ҚАЛДЫҚТЫ ТЕКСЕРУ ----------
