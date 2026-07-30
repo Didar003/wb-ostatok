@@ -720,9 +720,83 @@ def stickers_to_zip(stickers):
     return buf
 
 
+def stickers_to_zip_by_cell(stickers, orders_by_id, cell_map, propusk_bytes=None, list_bytes=None):
+    """
+    Стикерлерді баркод бойынша ячейка/ИП қапшықтарына бөліп ZIP жасайды.
+    orders_by_id: {orderId: order_dict} — баркодты табу үшін
+    cell_map: {barcode: {"cell": "10", "ip": "Tenderness"}}
+    propusk_bytes / list_bytes: әр ячейка қапшығына қосылатын ортақ PDF-тер (bytes немесе None)
+    Қайтарады: (BytesIO буфер, сәйкессіз қалған стикерлер саны)
+    """
+    buf = io.BytesIO()
+    unmatched = 0
+    with zipfile.ZipFile(buf, "w") as zf:
+        added_pdfs_to = set()
+        for s in stickers:
+            order_id = s.get("orderId")
+            file_b64 = s.get("file", "")
+            if not file_b64:
+                continue
+            order = orders_by_id.get(order_id, {})
+            skus = order.get("skus", [])
+            barcode = skus[0] if skus else ""
+            cell_info = cell_map.get(str(barcode), None)
+
+            if cell_info:
+                cell = cell_info.get("cell", "")
+                ip = cell_info.get("ip", "")
+                folder = f"{cell}_{ip}".strip("_")
+            else:
+                folder = "belgisiz_yacheyka"
+                unmatched += 1
+
+            zf.writestr(f"{folder}/sticker_{order_id}.png", base64.b64decode(file_b64))
+
+            if folder not in added_pdfs_to:
+                if propusk_bytes:
+                    zf.writestr(f"{folder}/propusk.pdf", propusk_bytes)
+                if list_bytes:
+                    zf.writestr(f"{folder}/list_podbora.pdf", list_bytes)
+                added_pdfs_to.add(folder)
+    buf.seek(0)
+    return buf, unmatched
+
+
+def show_cell_map_editor(store):
+    """Баркод → Ячейка → ИП картасын қолмен енгізу кестесі."""
+    idx = store["idx"]
+    all_cells = load_json(CELL_MAP_FILE)
+    store_cells = all_cells.get(str(idx), {})
+
+    rows = [{"Баркод": bc, "Ячейка": v.get("cell", ""), "ИП": v.get("ip", "")} for bc, v in store_cells.items()]
+    if not rows:
+        rows = [{"Баркод": "", "Ячейка": "", "ИП": ""}]
+    cell_df = pd.DataFrame(rows)
+
+    st.caption("Google Sheets-тегі кестеңізден Баркод, Ячейка, ИП бағандарын осында көшіріп қоюға болады")
+    edited_cells = st.data_editor(
+        cell_df, use_container_width=True, height=300, num_rows="dynamic", key=f"cell_map_editor_{idx}",
+        column_config={
+            "Баркод": st.column_config.TextColumn(),
+            "Ячейка": st.column_config.TextColumn(),
+            "ИП": st.column_config.TextColumn(),
+        },
+    )
+    new_cells = {}
+    for _, rr in edited_cells.iterrows():
+        bc = str(rr["Баркод"]).strip()
+        if bc and bc != "nan":
+            new_cells[bc] = {"cell": str(rr["Ячейка"]).strip(), "ip": str(rr["ИП"]).strip()}
+    if new_cells != store_cells:
+        all_cells[str(idx)] = new_cells
+        save_json(CELL_MAP_FILE, all_cells)
+    return new_cells
+
+
 EXPIRY_FILE = os.path.join(DATA_DIR, "expiry_data.json")
 DELIVERED_SUPPLIES_FILE = os.path.join(DATA_DIR, "delivered_supplies.json")
-PERSIST_FILES = PERSIST_FILES + ("expiry_data.json", "delivered_supplies.json")
+CELL_MAP_FILE = os.path.join(DATA_DIR, "cell_map.json")
+PERSIST_FILES = PERSIST_FILES + ("expiry_data.json", "delivered_supplies.json", "cell_map.json")
 
 
 def fetch_all_orders(mp_key, limit=1000, next_id=0):
@@ -812,6 +886,9 @@ def show_fbs_tab(store):
         return
 
     sub1, sub2 = st.tabs(["📥 Тапсырыстар & Стикер", "📦 Қалдықты тексеру"])
+
+    with st.expander("🗂️ Ячейка картасы (Баркод → Ячейка → ИП)", expanded=False):
+        cell_map_current = show_cell_map_editor(store)
 
     # ---------- ТАПСЫРЫСТАР (Новые / На сборке / В доставке) + СТИКЕР ----------
     with sub1:
@@ -982,12 +1059,44 @@ def show_fbs_tab(store):
                 if stickers:
                     zip_buf = stickers_to_zip(stickers)
                     st.download_button(
-                        "⬇️ Барлық стикерді ZIP түрінде жүктеу",
+                        "⬇️ Барлық стикерді ZIP түрінде жүктеу (жай)",
                         data=zip_buf.getvalue(),
                         file_name=f"stickers_{store['name']}.zip",
                         mime="application/zip",
                         key=f"fbs_zip_dl_{idx}",
                     )
+
+                    st.divider()
+                    st.markdown("**🗂️ Ячейка/ИП бойынша топталған ZIP (стикер + пропуск + лист подбора)**")
+                    pc1, pc2 = st.columns(2)
+                    with pc1:
+                        propusk_file = st.file_uploader("Пропуск PDF (поставкаға, міндетті емес)", type=["pdf"], key=f"fbs_propusk_{idx}")
+                    with pc2:
+                        list_file = st.file_uploader("Лист подбора PDF (поставкаға, міндетті емес)", type=["pdf"], key=f"fbs_list_{idx}")
+
+                    if st.button("📦 Ячейка бойынша ZIP жасау", key=f"fbs_zip_cell_{idx}", use_container_width=True):
+                        orders_by_id = {o.get("id"): o for o in new_orders}
+                        propusk_bytes = propusk_file.read() if propusk_file else None
+                        list_bytes = list_file.read() if list_file else None
+                        zip_cell_buf, unmatched = stickers_to_zip_by_cell(
+                            stickers, orders_by_id, cell_map_current, propusk_bytes, list_bytes
+                        )
+                        st.session_state[f"fbs_zip_cell_buf_{idx}"] = zip_cell_buf.getvalue()
+                        if unmatched:
+                            st.warning(f"⚠️ {unmatched} стикердің баркоды ячейка картасында табылмады — «belgisiz_yacheyka» қапшығына салынды")
+                        else:
+                            st.success("✅ Барлық стикер ячейкасы бойынша топталды")
+
+                    zip_cell_data = st.session_state.get(f"fbs_zip_cell_buf_{idx}")
+                    if zip_cell_data:
+                        st.download_button(
+                            "⬇️ Ячейка бойынша ZIP жүктеу",
+                            data=zip_cell_data,
+                            file_name=f"yacheyka_{store['name']}.zip",
+                            mime="application/zip",
+                            key=f"fbs_zip_cell_dl_{idx}",
+                        )
+
                     cols = st.columns(4)
                     for i, s in enumerate(stickers):
                         with cols[i % 4]:
