@@ -9,6 +9,7 @@ import json
 import os
 import base64
 import zipfile
+import hashlib
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
@@ -120,20 +121,54 @@ def save_json(path, data):
     if filename in PERSIST_FILES:
         github_save(filename, data)
 
+def _auth_token(secret_value, kind):
+    """Парольден қайтарылмайтын қысқа токен жасайды (URL-де сақтау үшін)."""
+    return hashlib.sha256(f"{kind}:{secret_value}".encode()).hexdigest()[:24]
+
+
 def check_password():
     if st.session_state.get("role"):
         return True
+
+    # ---- URL токен арқылы автологин (сайт ұйықтап кетіп қайта ашылғанда парольді қайта сұрамас үшін) ----
+    qp_token = st.query_params.get("auth_token", "")
+    if qp_token:
+        manager_pwd = st.secrets.get("MANAGER_PASSWORD", "")
+        if manager_pwd and qp_token == _auth_token(manager_pwd, "manager"):
+            st.session_state.role = "manager"
+            st.session_state.store_access = None
+            return True
+        for i in range(1, 21):
+            sub_pwd = st.secrets.get(f"SUBMANAGER_{i}_PASSWORD", "")
+            if sub_pwd and qp_token == _auth_token(sub_pwd, f"sub{i}"):
+                stores_str = st.secrets.get(f"SUBMANAGER_{i}_STORES", "")
+                allowed = [int(x.strip()) for x in stores_str.split(",") if x.strip().isdigit()]
+                st.session_state.role = "submanager"
+                st.session_state.store_access = allowed
+                return True
+        stores_str = st.secrets.get("STORE_NAMES", "")
+        store_names = [n.strip() for n in stores_str.split(",") if n.strip()]
+        for i, name in enumerate(store_names, 1):
+            owner_pwd = st.secrets.get(f"STORE_{i}_PASSWORD", "")
+            if owner_pwd and qp_token == _auth_token(owner_pwd, f"owner{i}"):
+                st.session_state.role = "owner"
+                st.session_state.store_access = i
+                return True
+
     st.title("🔐 Wildberries Отчёт")
     st.markdown("---")
     _, col, _ = st.columns([1, 1.5, 1])
     with col:
         st.markdown("### Вход")
-        pwd = st.text_input("Пароль", type="password", placeholder="••••••••")
-        if st.button("Войти →", use_container_width=True):
+        with st.form("login_form"):
+            pwd = st.text_input("Пароль", type="password", placeholder="••••••••")
+            submitted = st.form_submit_button("Войти →", use_container_width=True)
+        if submitted:
             manager_pwd = st.secrets.get("MANAGER_PASSWORD", "")
             if manager_pwd and pwd == manager_pwd:
                 st.session_state.role = "manager"
                 st.session_state.store_access = None
+                st.query_params["auth_token"] = _auth_token(manager_pwd, "manager")
                 st.rerun()
                 return True
             # SUBMANAGER — бірнеше ИП көретін қосымша менеджер
@@ -144,6 +179,7 @@ def check_password():
                     allowed = [int(x.strip()) for x in stores_str.split(",") if x.strip().isdigit()]
                     st.session_state.role = "submanager"
                     st.session_state.store_access = allowed
+                    st.query_params["auth_token"] = _auth_token(sub_pwd, f"sub{i}")
                     st.rerun()
                     return True
             stores_str = st.secrets.get("STORE_NAMES", "")
@@ -153,6 +189,7 @@ def check_password():
                 if owner_pwd and pwd == owner_pwd:
                     st.session_state.role = "owner"
                     st.session_state.store_access = i
+                    st.query_params["auth_token"] = _auth_token(owner_pwd, f"owner{i}")
                     st.rerun()
                     return True
             st.error("Неверный пароль!")
@@ -684,10 +721,69 @@ def stickers_to_zip(stickers):
 
 
 EXPIRY_FILE = os.path.join(DATA_DIR, "expiry_data.json")
-PERSIST_FILES = PERSIST_FILES + ("expiry_data.json",)
+DELIVERED_SUPPLIES_FILE = os.path.join(DATA_DIR, "delivered_supplies.json")
+PERSIST_FILES = PERSIST_FILES + ("expiry_data.json", "delivered_supplies.json")
 
 
-def expiry_status(exp_date_str):
+def fetch_all_orders(mp_key, limit=1000, next_id=0):
+    r = requests.get(
+        f"{MARKETPLACE_BASE}/api/v3/orders",
+        headers={"Authorization": mp_key},
+        params={"limit": limit, "next": next_id},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()  # {"orders": [...], "next": ...}
+
+
+def create_supply(mp_key, name):
+    r = requests.post(
+        f"{MARKETPLACE_BASE}/api/v3/supplies",
+        headers={"Authorization": mp_key, "Content-Type": "application/json"},
+        json={"name": name},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("id")
+
+
+def get_supplies(mp_key, limit=200):
+    r = requests.get(
+        f"{MARKETPLACE_BASE}/api/v3/supplies",
+        headers={"Authorization": mp_key},
+        params={"limit": limit, "next": 0},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("supplies", [])
+
+
+def add_orders_to_supply(mp_key, supply_id, order_ids):
+    """Бір поставкаға бірнеше сборочное задание қосады (максимум 100 бір сұранымда)."""
+    ok_all = True
+    for i in range(0, len(order_ids), 100):
+        batch = order_ids[i:i + 100]
+        r = requests.patch(
+            f"{MARKETPLACE_BASE}/api/v3/supplies/{supply_id}/orders",
+            headers={"Authorization": mp_key, "Content-Type": "application/json"},
+            json={"orders": batch},
+            timeout=30,
+        )
+        if r.status_code not in (200, 204):
+            ok_all = False
+    return ok_all
+
+
+def deliver_supply(mp_key, supply_id):
+    r = requests.patch(
+        f"{MARKETPLACE_BASE}/api/v3/supplies/{supply_id}/deliver",
+        headers={"Authorization": mp_key},
+        timeout=30,
+    )
+    return r.status_code in (200, 204)
+
+
+
     """Биту күніне дейін қанша күн қалғанын және статус түсін қайтарады."""
     if not exp_date_str:
         return None, ""
@@ -715,35 +811,73 @@ def show_fbs_tab(store):
         st.caption("Токенді ЛК Wildberries → Настройки → Доступ к новому API бөлімінен, Marketplace категориясын таңдап жасаңыз.")
         return
 
-    sub1, sub2 = st.tabs(["📥 Жаңа тапсырыстар & Стикер", "📦 Қалдықты тексеру"])
+    sub1, sub2 = st.tabs(["📥 Тапсырыстар & Стикер", "📦 Қалдықты тексеру"])
 
-    # ---------- ЖАҢА ТАПСЫРЫСТАР + СТИКЕР ----------
+    # ---------- ТАПСЫРЫСТАР (Новые / На сборке / В доставке) + СТИКЕР ----------
     with sub1:
-        if st.button("🔄 Жаңа тапсырыстарды жүктеу", key=f"fbs_orders_load_{idx}"):
+        if st.button("🔄 Тапсырыстарды жаңалау", key=f"fbs_orders_load_{idx}"):
             with st.spinner("Жүктелуде..."):
                 try:
-                    orders = fetch_new_fbs_orders(mp_key)
-                    st.session_state[f"fbs_orders_{idx}"] = orders
+                    new_orders = fetch_new_fbs_orders(mp_key)
+                    all_data = fetch_all_orders(mp_key, limit=1000)
+                    all_orders = all_data.get("orders", [])
+                    new_ids = [o.get("id") for o in new_orders]
+                    non_new_orders = [o for o in all_orders if o.get("id") not in new_ids]
+                    order_ids_check = [o.get("id") for o in non_new_orders]
+                    status_map = {}
+                    for i in range(0, len(order_ids_check), 1000):
+                        batch = order_ids_check[i:i + 1000]
+                        if batch:
+                            statuses = fetch_orders_status(mp_key, batch)
+                            for s in statuses:
+                                status_map[s.get("id")] = s
+                    st.session_state[f"fbs_new_{idx}"] = new_orders
+                    st.session_state[f"fbs_nonnew_{idx}"] = non_new_orders
+                    st.session_state[f"fbs_status_map_{idx}"] = status_map
                 except Exception as e:
                     st.error(f"Қате: {e}")
 
-        orders = st.session_state.get(f"fbs_orders_{idx}", [])
-        if not orders:
-            st.info("👆 Жаңа тапсырыстарды жүктеу үшін батырманы басыңыз")
-        else:
-            all_expiry = load_json(EXPIRY_FILE)
-            store_expiry = all_expiry.get(str(idx), {})
+        new_orders = st.session_state.get(f"fbs_new_{idx}", [])
+        non_new_orders = st.session_state.get(f"fbs_nonnew_{idx}", [])
+        status_map = st.session_state.get(f"fbs_status_map_{idx}", {})
 
+        all_delivered = load_json(DELIVERED_SUPPLIES_FILE)
+        delivered_supplies = set(all_delivered.get(str(idx), []))
+
+        confirm_orders = []
+        deliver_orders = []
+        for o in non_new_orders:
+            st_info = status_map.get(o.get("id"), {})
+            sup_status = st_info.get("supplierStatus", "")
+            supply_id = o.get("supplyId", "")
+            if sup_status == "confirm":
+                if supply_id and supply_id in delivered_supplies:
+                    deliver_orders.append(o)
+                else:
+                    confirm_orders.append(o)
+
+        n_new, n_confirm, n_deliver = len(new_orders), len(confirm_orders), len(deliver_orders)
+
+        choice = st.radio(
+            "Статус",
+            [f"🆕 Новые ({n_new})", f"📦 На сборке ({n_confirm})", f"🚚 В доставке ({n_deliver})"],
+            horizontal=True, key=f"fbs_status_choice_{idx}", label_visibility="collapsed",
+        )
+
+        all_expiry = load_json(EXPIRY_FILE)
+        store_expiry = all_expiry.get(str(idx), {})
+
+        def build_rows(orders_list):
             rows = []
-            for o in orders:
+            for o in orders_list:
                 order_id = str(o.get("id"))
                 saved_exp = store_expiry.get(order_id, "")
-                exp_date_val = None
+                exp_val = None
                 if saved_exp:
                     try:
-                        exp_date_val = datetime.strptime(saved_exp, "%Y-%m-%d").date()
+                        exp_val = datetime.strptime(saved_exp, "%Y-%m-%d").date()
                     except Exception:
-                        exp_date_val = None
+                        exp_val = None
                 rows.append({
                     "Таңдау": False,
                     "orderId": o.get("id"),
@@ -751,101 +885,165 @@ def show_fbs_tab(store):
                     "Баркод": o.get("skus", [""])[0] if o.get("skus") else "",
                     "Құн (₸)": o.get("convertedPrice", 0) / 100 if o.get("convertedPrice") else 0,
                     "Құрылған күні": o.get("createdAt", "")[:16].replace("T", " "),
-                    "Сроку годности": exp_date_val,
+                    "Сроку годности": exp_val,
                 })
-            # ---- АРТИКУЛ БОЙЫНША ТОПТАП ҚОЮ ----
-            unique_articles = sorted(set(r["Артикул"] for r in rows if r["Артикул"]))
-            bc1, bc2, bc3 = st.columns([1.3, 1, 0.7])
-            with bc1:
-                bulk_article = st.selectbox("Артикул таңдаңыз", unique_articles, key=f"fbs_bulk_art_{idx}")
-            with bc2:
-                bulk_date = st.date_input("Сроку годности", value=date.today()+timedelta(days=180), key=f"fbs_bulk_date_{idx}")
-            with bc3:
-                st.markdown("<br>", unsafe_allow_html=True)
-                bulk_apply = st.button("✅ Барлығына қолдану", key=f"fbs_bulk_apply_{idx}", use_container_width=True)
+            return rows
 
-            if bulk_apply and bulk_article:
-                count_applied = 0
-                for r in rows:
-                    if r["Артикул"] == bulk_article:
-                        store_expiry[str(r["orderId"])] = bulk_date.strftime("%Y-%m-%d")
-                        count_applied += 1
-                all_expiry[str(idx)] = store_expiry
-                save_json(EXPIRY_FILE, all_expiry)
-                st.success(f"✅ «{bulk_article}» артикулының {count_applied} тапсырысына {bulk_date.strftime('%d.%m.%Y')} қойылды")
-                st.rerun()
+        # ================= НОВЫЕ =================
+        if choice.startswith("🆕"):
+            if not new_orders:
+                st.info("Жаңа тапсырыс жоқ. 👆 «Тапсырыстарды жаңалау» басыңыз")
+            else:
+                rows = build_rows(new_orders)
 
-            st.divider()
+                unique_articles = sorted(set(r["Артикул"] for r in rows if r["Артикул"]))
+                bc1, bc2, bc3 = st.columns([1.3, 1, 0.7])
+                with bc1:
+                    bulk_article = st.selectbox("Артикул таңдаңыз", unique_articles, key=f"fbs_bulk_art_{idx}")
+                with bc2:
+                    bulk_date = st.date_input("Сроку годности", value=date.today()+timedelta(days=180), key=f"fbs_bulk_date_{idx}")
+                with bc3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    bulk_apply = st.button("✅ Барлығына қолдану", key=f"fbs_bulk_apply_{idx}", use_container_width=True)
 
-            # кестені жаңартылған сақталған мәндермен қайта құру (bulk apply-ден кейін)
-            for row in rows:
-                saved_exp2 = store_expiry.get(str(row["orderId"]), "")
-                if saved_exp2:
-                    try:
-                        row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
-                    except Exception:
-                        pass
-            df_orders = pd.DataFrame(rows)
+                if bulk_apply and bulk_article:
+                    count_applied = 0
+                    for r in rows:
+                        if r["Артикул"] == bulk_article:
+                            store_expiry[str(r["orderId"])] = bulk_date.strftime("%Y-%m-%d")
+                            count_applied += 1
+                    all_expiry[str(idx)] = store_expiry
+                    save_json(EXPIRY_FILE, all_expiry)
+                    st.success(f"✅ «{bulk_article}» — {count_applied} тапсырысқа {bulk_date.strftime('%d.%m.%Y')} қойылды")
+                    st.rerun()
 
-            edited = st.data_editor(
-                df_orders, use_container_width=True, height=400, key=f"fbs_orders_editor_{idx}",
-                column_config={
-                    "Таңдау": st.column_config.CheckboxColumn(),
-                    "orderId": st.column_config.NumberColumn(disabled=True),
-                    "Артикул": st.column_config.TextColumn(disabled=True),
-                    "Баркод": st.column_config.TextColumn(disabled=True),
-                    "Құн (₸)": st.column_config.NumberColumn(disabled=True, format="%.0f ₸"),
-                    "Құрылған күні": st.column_config.TextColumn(disabled=True),
-                    "Сроку годности": st.column_config.DateColumn(format="DD.MM.YYYY"),
-                },
-            )
+                st.divider()
+                for row in rows:
+                    saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                    if saved_exp2:
+                        try:
+                            row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                        except Exception:
+                            pass
+                df_orders = pd.DataFrame(rows)
 
-            new_expiry = {}
-            for _, rr in edited.iterrows():
-                if pd.notna(rr["Сроку годности"]):
-                    new_expiry[str(rr["orderId"])] = rr["Сроку годности"].strftime("%Y-%m-%d")
-            if new_expiry != store_expiry:
-                all_expiry[str(idx)] = new_expiry
-                save_json(EXPIRY_FILE, all_expiry)
-
-            expiring_soon = []
-            for _, rr in edited.iterrows():
-                if pd.notna(rr["Сроку годности"]):
-                    days_left, _ = expiry_status(rr["Сроку годности"].strftime("%Y-%m-%d"))
-                    if days_left is not None and days_left <= 30:
-                        expiring_soon.append((rr["orderId"], rr["Артикул"], days_left))
-            if expiring_soon:
-                st.warning("🔴 Мерзімі жақындаған тапсырыстар: " + ", ".join(
-                    f"orderId {oid} ({art}) — {dl} күн қалды" for oid, art, dl in expiring_soon
-                ))
-
-            selected_ids = edited[edited["Таңдау"]]["orderId"].tolist()
-            st.caption(f"Таңдалды: {len(selected_ids)} тапсырыс")
-
-            if st.button("🖨️ Стикер алу (таңдалғандарға)", key=f"fbs_sticker_btn_{idx}", disabled=not selected_ids):
-                with st.spinner("Стикерлер алынуда..."):
-                    try:
-                        stickers = fetch_order_stickers(mp_key, selected_ids, sticker_type="png")
-                        st.session_state[f"fbs_stickers_{idx}"] = stickers
-                        st.success(f"✅ {len(stickers)} стикер алынды!")
-                    except Exception as e:
-                        st.error(f"Стикер алу қатесі: {e}")
-
-            stickers = st.session_state.get(f"fbs_stickers_{idx}", [])
-            if stickers:
-                zip_buf = stickers_to_zip(stickers)
-                st.download_button(
-                    "⬇️ Барлық стикерді ZIP түрінде жүктеу",
-                    data=zip_buf.getvalue(),
-                    file_name=f"stickers_{store['name']}.zip",
-                    mime="application/zip",
-                    key=f"fbs_zip_dl_{idx}",
+                edited = st.data_editor(
+                    df_orders, use_container_width=True, height=400, key=f"fbs_new_editor_{idx}",
+                    column_config={
+                        "Таңдау": st.column_config.CheckboxColumn(),
+                        "orderId": st.column_config.NumberColumn(disabled=True),
+                        "Артикул": st.column_config.TextColumn(disabled=True),
+                        "Баркод": st.column_config.TextColumn(disabled=True),
+                        "Құн (₸)": st.column_config.NumberColumn(disabled=True, format="%.0f ₸"),
+                        "Құрылған күні": st.column_config.TextColumn(disabled=True),
+                        "Сроку годности": st.column_config.DateColumn(format="DD.MM.YYYY"),
+                    },
                 )
-                cols = st.columns(4)
-                for i, s in enumerate(stickers):
-                    with cols[i % 4]:
-                        if s.get("file"):
-                            st.image(base64.b64decode(s["file"]), caption=f"orderId: {s.get('orderId')}")
+
+                new_expiry = {}
+                for _, rr in edited.iterrows():
+                    if pd.notna(rr["Сроку годности"]):
+                        new_expiry[str(rr["orderId"])] = rr["Сроку годности"].strftime("%Y-%m-%d")
+                for k, v in new_expiry.items():
+                    store_expiry[k] = v
+                if new_expiry:
+                    all_expiry[str(idx)] = store_expiry
+                    save_json(EXPIRY_FILE, all_expiry)
+
+                selected_ids = edited[edited["Таңдау"]]["orderId"].tolist()
+                st.caption(f"Таңдалды: {len(selected_ids)} тапсырыс")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("📦 Сборкаға қосу (таңдалғандарды)", key=f"fbs_to_confirm_{idx}", disabled=not selected_ids, use_container_width=True):
+                        with st.spinner("Поставка жасалуда..."):
+                            try:
+                                supply_name = f"{store['name']} — {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                                supply_id = create_supply(mp_key, supply_name)
+                                ok = add_orders_to_supply(mp_key, supply_id, [int(x) for x in selected_ids])
+                                if ok:
+                                    st.success(f"✅ {len(selected_ids)} тапсырыс жаңа поставкаға ({supply_id}) қосылды — олар «На сборке» бөліміне өтті")
+                                else:
+                                    st.warning("⚠️ Кейбір тапсырыстар қосылмады, тексеріңіз")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Қате: {e}")
+                with c2:
+                    if st.button("🖨️ Стикер алу (таңдалғандарға)", key=f"fbs_sticker_btn_{idx}", disabled=not selected_ids, use_container_width=True):
+                        with st.spinner("Стикерлер алынуда..."):
+                            try:
+                                stickers = fetch_order_stickers(mp_key, selected_ids, sticker_type="png")
+                                st.session_state[f"fbs_stickers_{idx}"] = stickers
+                                st.success(f"✅ {len(stickers)} стикер алынды!")
+                            except Exception as e:
+                                st.error(f"Стикер алу қатесі: {e}")
+
+                stickers = st.session_state.get(f"fbs_stickers_{idx}", [])
+                if stickers:
+                    zip_buf = stickers_to_zip(stickers)
+                    st.download_button(
+                        "⬇️ Барлық стикерді ZIP түрінде жүктеу",
+                        data=zip_buf.getvalue(),
+                        file_name=f"stickers_{store['name']}.zip",
+                        mime="application/zip",
+                        key=f"fbs_zip_dl_{idx}",
+                    )
+                    cols = st.columns(4)
+                    for i, s in enumerate(stickers):
+                        with cols[i % 4]:
+                            if s.get("file"):
+                                st.image(base64.b64decode(s["file"]), caption=f"orderId: {s.get('orderId')}")
+
+        # ================= НА СБОРКЕ =================
+        elif choice.startswith("📦"):
+            if not confirm_orders:
+                st.info("«На сборке» статусында тапсырыс жоқ")
+            else:
+                by_supply = {}
+                for o in confirm_orders:
+                    sid = o.get("supplyId", "—")
+                    by_supply.setdefault(sid, []).append(o)
+
+                for sid, orders_in_supply in by_supply.items():
+                    with st.container():
+                        st.markdown(f"**Поставка: `{sid}`** — {len(orders_in_supply)} тапсырыс")
+                        rows = build_rows(orders_in_supply)
+                        for row in rows:
+                            saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                            if saved_exp2:
+                                try:
+                                    row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                                except Exception:
+                                    pass
+                        st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(300, 45+len(rows)*35))
+
+                        if sid != "—" and st.button("🚚 Осы поставканы доставкаға беру", key=f"fbs_deliver_{idx}_{sid}"):
+                            with st.spinner("Доставкаға берілуде..."):
+                                ok = deliver_supply(mp_key, sid)
+                                if ok:
+                                    delivered_supplies.add(sid)
+                                    all_delivered[str(idx)] = list(delivered_supplies)
+                                    save_json(DELIVERED_SUPPLIES_FILE, all_delivered)
+                                    st.success(f"✅ Поставка {sid} доставкаға берілді")
+                                    st.rerun()
+                                else:
+                                    st.error("Қате — поставканы доставкаға беру мүмкін болмады")
+                        st.divider()
+
+        # ================= В ДОСТАВКЕ =================
+        else:
+            if not deliver_orders:
+                st.info("«В доставке» статусында тапсырыс жоқ")
+            else:
+                rows = build_rows(deliver_orders)
+                for row in rows:
+                    saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                    if saved_exp2:
+                        try:
+                            row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                        except Exception:
+                            pass
+                st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(400, 45+len(rows)*35))
 
     # ---------- ҚАЛДЫҚТЫ ТЕКСЕРУ ----------
     with sub2:
@@ -1910,6 +2108,7 @@ with st.sidebar:
     if st.button("🚪 Выйти"):
         st.session_state.role = None
         st.session_state.store_access = None
+        st.query_params.clear()
         st.rerun()
 
 # ── НЕГІЗГІ ──
