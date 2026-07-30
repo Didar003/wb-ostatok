@@ -10,6 +10,7 @@ import os
 import base64
 import zipfile
 import hashlib
+from PIL import Image
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
@@ -722,42 +723,49 @@ def stickers_to_zip(stickers):
 
 def stickers_to_zip_by_cell(stickers, orders_by_id, cell_map, propusk_bytes=None, list_bytes=None):
     """
-    Стикерлерді баркод бойынша ячейка/ИП қапшықтарына бөліп ZIP жасайды.
+    Стикерлерді ячейка/ИП бойынша топтап ZIP жасайды.
+    Қапшық аты: "{ячейка} Ячейка {ИП}", ішінде:
+      "{ИП} стикер.pdf" — сол ячейкадағы барлық тапсырыстың стикерлері бір PDF-те біріктірілген
+      "{ИП} пропуск.pdf" / "{ИП} Лист .pdf" — қолмен жүктелген ортақ құжаттардың көшірмесі
     orders_by_id: {orderId: order_dict} — баркодты табу үшін
-    cell_map: {barcode: {"cell": "10", "ip": "Tenderness"}}
-    propusk_bytes / list_bytes: әр ячейка қапшығына қосылатын ортақ PDF-тер (bytes немесе None)
+    cell_map: {barcode: {"cell": "10", "ip": "Тендернес"}}
     Қайтарады: (BytesIO буфер, сәйкессіз қалған стикерлер саны)
     """
-    buf = io.BytesIO()
+    grouped = {}
     unmatched = 0
+    for s in stickers:
+        order_id = s.get("orderId")
+        file_b64 = s.get("file", "")
+        if not file_b64:
+            continue
+        order = orders_by_id.get(order_id, {})
+        skus = order.get("skus", [])
+        barcode = skus[0] if skus else ""
+        cell_info = cell_map.get(str(barcode))
+        if cell_info:
+            cell = cell_info.get("cell", "")
+            ip = cell_info.get("ip", "")
+        else:
+            cell, ip = "", "Белгісіз"
+            unmatched += 1
+        grouped.setdefault((cell, ip), []).append(base64.b64decode(file_b64))
+
+    buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        added_pdfs_to = set()
-        for s in stickers:
-            order_id = s.get("orderId")
-            file_b64 = s.get("file", "")
-            if not file_b64:
-                continue
-            order = orders_by_id.get(order_id, {})
-            skus = order.get("skus", [])
-            barcode = skus[0] if skus else ""
-            cell_info = cell_map.get(str(barcode), None)
+        for (cell, ip), img_bytes_list in grouped.items():
+            folder = f"{cell} Ячейка {ip}".strip()
 
-            if cell_info:
-                cell = cell_info.get("cell", "")
-                ip = cell_info.get("ip", "")
-                folder = f"{cell}_{ip}".strip("_")
-            else:
-                folder = "belgisiz_yacheyka"
-                unmatched += 1
+            images = [Image.open(io.BytesIO(b)).convert("RGB") for b in img_bytes_list]
+            if images:
+                sticker_pdf_buf = io.BytesIO()
+                images[0].save(sticker_pdf_buf, format="PDF", save_all=True, append_images=images[1:])
+                zf.writestr(f"{folder}/{ip} стикер.pdf", sticker_pdf_buf.getvalue())
 
-            zf.writestr(f"{folder}/sticker_{order_id}.png", base64.b64decode(file_b64))
+            if propusk_bytes:
+                zf.writestr(f"{folder}/{ip} пропуск.pdf", propusk_bytes)
+            if list_bytes:
+                zf.writestr(f"{folder}/{ip} Лист .pdf", list_bytes)
 
-            if folder not in added_pdfs_to:
-                if propusk_bytes:
-                    zf.writestr(f"{folder}/propusk.pdf", propusk_bytes)
-                if list_bytes:
-                    zf.writestr(f"{folder}/list_podbora.pdf", list_bytes)
-                added_pdfs_to.add(folder)
     buf.seek(0)
     return buf, unmatched
 
