@@ -1193,7 +1193,7 @@ def show_fbs_tab(store):
 
                 for sid, orders_in_supply in by_supply_deliver.items():
                     sup_info = supply_info_cache.get(sid, {})
-                    if sup_info.get("done"):
+                    if sup_info.get("scanDt"):
                         badge = "✅ Поставка в обработке (WB қабылдады)"
                     elif sup_info.get("closedAt"):
                         badge = "🚚 Отгрузите поставку (әлі апарылмаған)"
