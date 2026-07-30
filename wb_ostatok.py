@@ -2443,3 +2443,4 @@ else:
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
         show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
+        
