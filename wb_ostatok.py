@@ -956,16 +956,21 @@ def show_fbs_tab(store):
             sid = o.get("supplyId", "—")
             by_supply_raw.setdefault(sid, []).append(o)
 
+        supply_info_cache = {}
         confirm_orders = []
         for sid, orders_in_supply in by_supply_raw.items():
-            sup_done = False
+            sup_closed = False
+            sup_info = {}
             if sid != "—":
                 try:
                     sup_info = get_supply_details(mp_key, sid)
-                    sup_done = bool(sup_info.get("done"))
+                    # closedAt бар болса — поставка деливерге берілген (WB-дің "В доставке" табындағыдай)
+                    sup_closed = bool(sup_info.get("closedAt"))
                 except Exception:
-                    sup_done = False
-            if sup_done:
+                    sup_info = {}
+                    sup_closed = False
+            supply_info_cache[sid] = sup_info
+            if sup_closed:
                 deliver_orders.extend(orders_in_supply)
             else:
                 confirm_orders.extend(orders_in_supply)
@@ -1181,15 +1186,34 @@ def show_fbs_tab(store):
             if not deliver_orders:
                 st.info("«В доставке» статусында тапсырыс жоқ")
             else:
-                rows = build_rows(deliver_orders)
-                for row in rows:
-                    saved_exp2 = store_expiry.get(str(row["orderId"]), "")
-                    if saved_exp2:
-                        try:
-                            row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
-                        except Exception:
-                            pass
-                st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(400, 45+len(rows)*35))
+                by_supply_deliver = {}
+                for o in deliver_orders:
+                    sid = o.get("supplyId", "—")
+                    by_supply_deliver.setdefault(sid, []).append(o)
+
+                for sid, orders_in_supply in by_supply_deliver.items():
+                    sup_info = supply_info_cache.get(sid, {})
+                    if sup_info.get("done"):
+                        badge = "✅ Поставка в обработке (WB қабылдады)"
+                    elif sup_info.get("closedAt"):
+                        badge = "🚚 Отгрузите поставку (әлі апарылмаған)"
+                    else:
+                        badge = ""
+                    label = f"**Поставка: `{sid}`** — {len(orders_in_supply)} тапсырыс"
+                    if badge:
+                        label += f"  \n{badge}"
+                    st.markdown(label)
+
+                    rows = build_rows(orders_in_supply)
+                    for row in rows:
+                        saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                        if saved_exp2:
+                            try:
+                                row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                            except Exception:
+                                pass
+                    st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(300, 45+len(rows)*35))
+                    st.divider()
 
 
     # ---------- ҚАЛДЫҚТЫ ТЕКСЕРУ ----------
@@ -2473,3 +2497,4 @@ else:
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
         show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
+        
