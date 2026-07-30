@@ -934,12 +934,10 @@ def show_fbs_tab(store):
         for o in non_new_orders:
             st_info = status_map.get(o.get("id"), {})
             sup_status = st_info.get("supplierStatus", "")
-            supply_id = o.get("supplyId", "")
             if sup_status == "confirm":
-                if supply_id and supply_id in delivered_supplies:
-                    deliver_orders.append(o)
-                else:
-                    confirm_orders.append(o)
+                confirm_orders.append(o)
+            elif sup_status == "complete":
+                deliver_orders.append(o)
 
         n_new, n_confirm, n_deliver = len(new_orders), len(confirm_orders), len(deliver_orders)
 
@@ -2443,4 +2441,3 @@ else:
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
         show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
-        
