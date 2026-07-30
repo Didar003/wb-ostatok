@@ -856,6 +856,16 @@ def add_orders_to_supply(mp_key, supply_id, order_ids):
     return ok_all
 
 
+def get_supply_details(mp_key, supply_id):
+    r = requests.get(
+        f"{MARKETPLACE_BASE}/api/v3/supplies/{supply_id}",
+        headers={"Authorization": mp_key},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()  # {"id":..., "done": true/false, "scanDt":..., ...}
+
+
 def deliver_supply(mp_key, supply_id):
     r = requests.patch(
         f"{MARKETPLACE_BASE}/api/v3/supplies/{supply_id}/deliver",
@@ -929,15 +939,36 @@ def show_fbs_tab(store):
         all_delivered = load_json(DELIVERED_SUPPLIES_FILE)
         delivered_supplies = set(all_delivered.get(str(idx), []))
 
-        confirm_orders = []
+        confirm_orders_raw = []
         deliver_orders = []
         for o in non_new_orders:
             st_info = status_map.get(o.get("id"), {})
             sup_status = st_info.get("supplierStatus", "")
             if sup_status == "confirm":
-                confirm_orders.append(o)
+                confirm_orders_raw.append(o)
             elif sup_status == "complete":
                 deliver_orders.append(o)
+
+        # "confirm" статусындағы поставкалар нақты сканерленген бе (done) тексереміз —
+        # сканерленген болса, ол іс жүзінде отгрузка жасалған, "В доставке"-ге көшіреміз
+        by_supply_raw = {}
+        for o in confirm_orders_raw:
+            sid = o.get("supplyId", "—")
+            by_supply_raw.setdefault(sid, []).append(o)
+
+        confirm_orders = []
+        for sid, orders_in_supply in by_supply_raw.items():
+            sup_done = False
+            if sid != "—":
+                try:
+                    sup_info = get_supply_details(mp_key, sid)
+                    sup_done = bool(sup_info.get("done"))
+                except Exception:
+                    sup_done = False
+            if sup_done:
+                deliver_orders.extend(orders_in_supply)
+            else:
+                confirm_orders.extend(orders_in_supply)
 
         n_new, n_confirm, n_deliver = len(new_orders), len(confirm_orders), len(deliver_orders)
 
@@ -1159,6 +1190,7 @@ def show_fbs_tab(store):
                         except Exception:
                             pass
                 st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(400, 45+len(rows)*35))
+
 
     # ---------- ҚАЛДЫҚТЫ ТЕКСЕРУ ----------
     with sub2:
