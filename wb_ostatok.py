@@ -975,7 +975,11 @@ def show_fbs_tab(store):
             else:
                 confirm_orders.append(o)
 
-        n_new, n_confirm, n_deliver = len(new_orders), len(confirm_orders), len(deliver_orders)
+        n_new, n_confirm = len(new_orders), len(confirm_orders)
+        n_deliver = sum(
+            1 for o in deliver_orders
+            if not supply_info_cache.get(o.get("supplyId", ""), {}).get("scanDt")
+        )
 
         choice = st.radio(
             "Статус",
@@ -1191,28 +1195,34 @@ def show_fbs_tab(store):
                     sid = o.get("supplyId", "—")
                     by_supply_deliver.setdefault(sid, []).append(o)
 
-                for sid, orders_in_supply in by_supply_deliver.items():
-                    sup_info = supply_info_cache.get(sid, {})
-                    if sup_info.get("scanDt"):
-                        badge = "✅ Поставка в обработке (WB қабылдады)"
-                    elif sup_info.get("closedAt"):
-                        badge = "🚚 Отгрузите поставку (әлі апарылмаған)"
-                    else:
-                        badge = ""
-                    label = f"**Поставка: `{sid}`** — {len(orders_in_supply)} тапсырыс"
-                    if badge:
-                        label += f"  \n{badge}"
-                    st.markdown(label)
+                # WB қабылдап алған (scanDt бар) поставкаларды көрсетпейміз —
+                # тек әлі апарылмаған, әрекет керек поставкалар қалады
+                pending_supply = {
+                    sid: orders_in_supply
+                    for sid, orders_in_supply in by_supply_deliver.items()
+                    if not supply_info_cache.get(sid, {}).get("scanDt")
+                }
 
-                    rows = build_rows(orders_in_supply)
-                    for row in rows:
-                        saved_exp2 = store_expiry.get(str(row["orderId"]), "")
-                        if saved_exp2:
-                            try:
-                                row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
-                            except Exception:
-                                pass
-                    st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(300, 45+len(rows)*35))
+                if not pending_supply:
+                    st.success("✅ Барлық поставка WB тарапынан қабылданды — әрекет керек ештеңе жоқ")
+                else:
+                    for sid, orders_in_supply in pending_supply.items():
+                        sup_info = supply_info_cache.get(sid, {})
+                        badge = "🚚 Отгрузите поставку (әлі апарылмаған)" if sup_info.get("closedAt") else ""
+                        label = f"**Поставка: `{sid}`** — {len(orders_in_supply)} тапсырыс"
+                        if badge:
+                            label += f"  \n{badge}"
+                        st.markdown(label)
+
+                        rows = build_rows(orders_in_supply)
+                        for row in rows:
+                            saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                            if saved_exp2:
+                                try:
+                                    row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                                except Exception:
+                                    pass
+                        st.dataframe(pd.DataFrame(rows).drop(columns=["Таңдау"]), use_container_width=True, height=min(300, 45+len(rows)*35))
                     st.divider()
 
 
