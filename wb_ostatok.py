@@ -940,40 +940,40 @@ def show_fbs_tab(store):
         delivered_supplies = set(all_delivered.get(str(idx), []))
 
         confirm_orders_raw = []
-        deliver_orders = []
+        deliver_orders_raw = []
         for o in non_new_orders:
             st_info = status_map.get(o.get("id"), {})
             sup_status = st_info.get("supplierStatus", "")
             if sup_status == "confirm":
                 confirm_orders_raw.append(o)
             elif sup_status == "complete":
-                deliver_orders.append(o)
+                deliver_orders_raw.append(o)
 
-        # "confirm" статусындағы поставкалар нақты сканерленген бе (done) тексереміз —
-        # сканерленген болса, ол іс жүзінде отгрузка жасалған, "В доставке"-ге көшіреміз
-        by_supply_raw = {}
-        for o in confirm_orders_raw:
-            sid = o.get("supplyId", "—")
-            by_supply_raw.setdefault(sid, []).append(o)
+        # Барлық (confirm + complete) поставкалар үшін бір рет ақпарат жинаймыз:
+        # closedAt бар ма (деливерге берілген бе) және done (WB қабылдап, сканерлеген бе)
+        all_supply_ids = set()
+        for o in confirm_orders_raw + deliver_orders_raw:
+            sid = o.get("supplyId", "")
+            if sid:
+                all_supply_ids.add(sid)
 
         supply_info_cache = {}
+        for sid in all_supply_ids:
+            try:
+                supply_info_cache[sid] = get_supply_details(mp_key, sid)
+            except Exception:
+                supply_info_cache[sid] = {}
+
         confirm_orders = []
-        for sid, orders_in_supply in by_supply_raw.items():
-            sup_closed = False
-            sup_info = {}
-            if sid != "—":
-                try:
-                    sup_info = get_supply_details(mp_key, sid)
-                    # closedAt бар болса — поставка деливерге берілген (WB-дің "В доставке" табындағыдай)
-                    sup_closed = bool(sup_info.get("closedAt"))
-                except Exception:
-                    sup_info = {}
-                    sup_closed = False
-            supply_info_cache[sid] = sup_info
-            if sup_closed:
-                deliver_orders.extend(orders_in_supply)
+        deliver_orders = list(deliver_orders_raw)
+        for o in confirm_orders_raw:
+            sid = o.get("supplyId", "")
+            sup_info = supply_info_cache.get(sid, {})
+            # closedAt бар болса — поставка деливерге берілген (WB-дің "В доставке" табындағыдай)
+            if sup_info.get("closedAt"):
+                deliver_orders.append(o)
             else:
-                confirm_orders.extend(orders_in_supply)
+                confirm_orders.append(o)
 
         n_new, n_confirm, n_deliver = len(new_orders), len(confirm_orders), len(deliver_orders)
 
@@ -2497,4 +2497,3 @@ else:
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
         show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
-        
