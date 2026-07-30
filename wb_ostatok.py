@@ -8,6 +8,7 @@ import time
 import json
 import os
 import base64
+import zipfile
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
 st.markdown("<style>.block-container{padding-top:1.5rem;}</style>", unsafe_allow_html=True)
@@ -20,6 +21,8 @@ SEBEST_FILE   = os.path.join(DATA_DIR, "sebest_data.json")
 LOGISTIC_FILE = os.path.join(DATA_DIR, "logistic_data.json")
 
 PERSIST_FILES = ("sebest_data.json", "fbo_data.json", "logistic_data.json")
+
+MARKETPLACE_BASE = "https://marketplace-api.wildberries.ru"
 
 def _tmp(name):
     return os.path.join(DATA_DIR, name)
@@ -169,6 +172,7 @@ def get_stores():
         analytics_key = st.secrets.get(f"STORE_{i}_ANALYTICS", "")
         finance_key = st.secrets.get(f"STORE_{i}_FINANCE", "")
         feedback_key = st.secrets.get(f"STORE_{i}_FEEDBACK", "")
+        marketplace_key = st.secrets.get(f"STORE_{i}_MARKETPLACE", "")
         if stats_key:
             stores.append({
                 "name": name, "idx": i,
@@ -176,6 +180,7 @@ def get_stores():
                 "analytics_key": analytics_key,
                 "finance_key": finance_key,
                 "feedback_key": feedback_key,
+                "marketplace_key": marketplace_key,
             })
     return stores
 
@@ -569,6 +574,317 @@ def send_feedback_complaint(fb_key, feedback_id):
     except:
         return False
 
+
+# ============================================================
+# FBS МОДУЛІ — қалдық тексеру + стикер алу (Marketplace API)
+# ============================================================
+
+def fetch_fbs_warehouses(mp_key):
+    r = requests.get(
+        f"{MARKETPLACE_BASE}/api/v3/warehouses",
+        headers={"Authorization": mp_key},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()  # [{"id":..., "name":..., "cargoType":...}, ...]
+
+
+def fetch_fbs_stocks(mp_key, warehouse_id, skus):
+    """skus — баркодтар тізімі (list of str)."""
+    r = requests.post(
+        f"{MARKETPLACE_BASE}/api/v3/stocks/{warehouse_id}",
+        headers={"Authorization": mp_key, "Content-Type": "application/json"},
+        json={"skus": skus},
+        timeout=30,
+    )
+    if r.status_code == 429:
+        time.sleep(10)
+        r = requests.post(
+            f"{MARKETPLACE_BASE}/api/v3/stocks/{warehouse_id}",
+            headers={"Authorization": mp_key, "Content-Type": "application/json"},
+            json={"skus": skus},
+            timeout=30,
+        )
+    r.raise_for_status()
+    return r.json().get("stocks", [])  # [{"sku":..., "amount":...}, ...]
+
+
+def update_fbs_stocks(mp_key, warehouse_id, stock_updates):
+    """stock_updates — [{"sku": "...", "amount": 10}, ...] қалдықты жаңарту үшін."""
+    r = requests.put(
+        f"{MARKETPLACE_BASE}/api/v3/stocks/{warehouse_id}",
+        headers={"Authorization": mp_key, "Content-Type": "application/json"},
+        json={"stocks": stock_updates},
+        timeout=30,
+    )
+    return r.status_code in (200, 204)
+
+
+def fetch_new_fbs_orders(mp_key):
+    r = requests.get(
+        f"{MARKETPLACE_BASE}/api/v3/orders/new",
+        headers={"Authorization": mp_key},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("orders", [])
+
+
+def fetch_orders_status(mp_key, order_ids):
+    """Тапсырыс статусын тексеру (мысалы, жіберілді ме, отменен бе)."""
+    r = requests.post(
+        f"{MARKETPLACE_BASE}/api/v3/orders/status",
+        headers={"Authorization": mp_key, "Content-Type": "application/json"},
+        json={"orders": order_ids},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("orders", [])
+
+
+def fetch_order_stickers(mp_key, order_ids, sticker_type="png", width=58, height=40):
+    """
+    order_ids — сборка тапсырмаларының orderId тізімі (бір сұранымда max 100)
+    sticker_type — "png" немесе "svg"
+    Қайтарады: [{"orderId":..., "partA":..., "partB":..., "barcode":..., "file": "<base64>"}]
+    """
+    params = {"type": sticker_type, "width": width, "height": height}
+    r = requests.post(
+        f"{MARKETPLACE_BASE}/api/v3/orders/stickers",
+        headers={"Authorization": mp_key, "Content-Type": "application/json"},
+        params=params,
+        json={"orders": order_ids},
+        timeout=30,
+    )
+    if r.status_code == 429:
+        time.sleep(10)
+        r = requests.post(
+            f"{MARKETPLACE_BASE}/api/v3/orders/stickers",
+            headers={"Authorization": mp_key, "Content-Type": "application/json"},
+            params=params,
+            json={"orders": order_ids},
+            timeout=30,
+        )
+    r.raise_for_status()
+    return r.json().get("stickers", [])
+
+
+def stickers_to_zip(stickers):
+    """Барлық стикерлерді бір ZIP файлға жинайды (файл ретінде жүктеп алу үшін)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for s in stickers:
+            order_id = s.get("orderId", "unknown")
+            file_b64 = s.get("file", "")
+            ext = "png"
+            if file_b64:
+                zf.writestr(f"sticker_{order_id}.{ext}", base64.b64decode(file_b64))
+    buf.seek(0)
+    return buf
+
+
+EXPIRY_FILE = os.path.join(DATA_DIR, "expiry_data.json")
+PERSIST_FILES = PERSIST_FILES + ("expiry_data.json",)
+
+
+def expiry_status(exp_date_str):
+    """Биту күніне дейін қанша күн қалғанын және статус түсін қайтарады."""
+    if not exp_date_str:
+        return None, ""
+    try:
+        exp_date = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
+    except Exception:
+        return None, ""
+    days_left = (exp_date - date.today()).days
+    if days_left < 0:
+        return days_left, "background-color:#FCEBEB;color:#A32D2D;font-weight:bold"
+    elif days_left <= 30:
+        return days_left, "background-color:#FCEBEB;color:#A32D2D;font-weight:bold"
+    elif days_left <= 90:
+        return days_left, "background-color:#FAEEDA;color:#854F0B;font-weight:bold"
+    else:
+        return days_left, "background-color:#EAF3DE;color:#3B6D11"
+
+
+def show_fbs_tab(store):
+    idx = store["idx"]
+    mp_key = store.get("marketplace_key", "")
+
+    if not mp_key:
+        st.warning(f"⚠️ Бұл кабинетте Marketplace токені жоқ. Secrets-ке STORE_{idx}_MARKETPLACE қосыңыз.")
+        st.caption("Токенді ЛК Wildberries → Настройки → Доступ к новому API бөлімінен, Marketplace категориясын таңдап жасаңыз.")
+        return
+
+    sub1, sub2 = st.tabs(["📥 Жаңа тапсырыстар & Стикер", "📦 Қалдықты тексеру"])
+
+    # ---------- ЖАҢА ТАПСЫРЫСТАР + СТИКЕР ----------
+    with sub1:
+        if st.button("🔄 Жаңа тапсырыстарды жүктеу", key=f"fbs_orders_load_{idx}"):
+            with st.spinner("Жүктелуде..."):
+                try:
+                    orders = fetch_new_fbs_orders(mp_key)
+                    st.session_state[f"fbs_orders_{idx}"] = orders
+                except Exception as e:
+                    st.error(f"Қате: {e}")
+
+        orders = st.session_state.get(f"fbs_orders_{idx}", [])
+        if not orders:
+            st.info("👆 Жаңа тапсырыстарды жүктеу үшін батырманы басыңыз")
+        else:
+            all_expiry = load_json(EXPIRY_FILE)
+            store_expiry = all_expiry.get(str(idx), {})
+
+            rows = []
+            for o in orders:
+                order_id = str(o.get("id"))
+                saved_exp = store_expiry.get(order_id, "")
+                exp_date_val = None
+                if saved_exp:
+                    try:
+                        exp_date_val = datetime.strptime(saved_exp, "%Y-%m-%d").date()
+                    except Exception:
+                        exp_date_val = None
+                rows.append({
+                    "Таңдау": False,
+                    "orderId": o.get("id"),
+                    "Артикул": o.get("article", ""),
+                    "Баркод": o.get("skus", [""])[0] if o.get("skus") else "",
+                    "Құн (₸)": o.get("convertedPrice", 0) / 100 if o.get("convertedPrice") else 0,
+                    "Құрылған күні": o.get("createdAt", "")[:16].replace("T", " "),
+                    "Сроку годности": exp_date_val,
+                })
+            # ---- АРТИКУЛ БОЙЫНША ТОПТАП ҚОЮ ----
+            unique_articles = sorted(set(r["Артикул"] for r in rows if r["Артикул"]))
+            bc1, bc2, bc3 = st.columns([1.3, 1, 0.7])
+            with bc1:
+                bulk_article = st.selectbox("Артикул таңдаңыз", unique_articles, key=f"fbs_bulk_art_{idx}")
+            with bc2:
+                bulk_date = st.date_input("Сроку годности", value=date.today()+timedelta(days=180), key=f"fbs_bulk_date_{idx}")
+            with bc3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                bulk_apply = st.button("✅ Барлығына қолдану", key=f"fbs_bulk_apply_{idx}", use_container_width=True)
+
+            if bulk_apply and bulk_article:
+                count_applied = 0
+                for r in rows:
+                    if r["Артикул"] == bulk_article:
+                        store_expiry[str(r["orderId"])] = bulk_date.strftime("%Y-%m-%d")
+                        count_applied += 1
+                all_expiry[str(idx)] = store_expiry
+                save_json(EXPIRY_FILE, all_expiry)
+                st.success(f"✅ «{bulk_article}» артикулының {count_applied} тапсырысына {bulk_date.strftime('%d.%m.%Y')} қойылды")
+                st.rerun()
+
+            st.divider()
+
+            # кестені жаңартылған сақталған мәндермен қайта құру (bulk apply-ден кейін)
+            for row in rows:
+                saved_exp2 = store_expiry.get(str(row["orderId"]), "")
+                if saved_exp2:
+                    try:
+                        row["Сроку годности"] = datetime.strptime(saved_exp2, "%Y-%m-%d").date()
+                    except Exception:
+                        pass
+            df_orders = pd.DataFrame(rows)
+
+            edited = st.data_editor(
+                df_orders, use_container_width=True, height=400, key=f"fbs_orders_editor_{idx}",
+                column_config={
+                    "Таңдау": st.column_config.CheckboxColumn(),
+                    "orderId": st.column_config.NumberColumn(disabled=True),
+                    "Артикул": st.column_config.TextColumn(disabled=True),
+                    "Баркод": st.column_config.TextColumn(disabled=True),
+                    "Құн (₸)": st.column_config.NumberColumn(disabled=True, format="%.0f ₸"),
+                    "Құрылған күні": st.column_config.TextColumn(disabled=True),
+                    "Сроку годности": st.column_config.DateColumn(format="DD.MM.YYYY"),
+                },
+            )
+
+            new_expiry = {}
+            for _, rr in edited.iterrows():
+                if pd.notna(rr["Сроку годности"]):
+                    new_expiry[str(rr["orderId"])] = rr["Сроку годности"].strftime("%Y-%m-%d")
+            if new_expiry != store_expiry:
+                all_expiry[str(idx)] = new_expiry
+                save_json(EXPIRY_FILE, all_expiry)
+
+            expiring_soon = []
+            for _, rr in edited.iterrows():
+                if pd.notna(rr["Сроку годности"]):
+                    days_left, _ = expiry_status(rr["Сроку годности"].strftime("%Y-%m-%d"))
+                    if days_left is not None and days_left <= 30:
+                        expiring_soon.append((rr["orderId"], rr["Артикул"], days_left))
+            if expiring_soon:
+                st.warning("🔴 Мерзімі жақындаған тапсырыстар: " + ", ".join(
+                    f"orderId {oid} ({art}) — {dl} күн қалды" for oid, art, dl in expiring_soon
+                ))
+
+            selected_ids = edited[edited["Таңдау"]]["orderId"].tolist()
+            st.caption(f"Таңдалды: {len(selected_ids)} тапсырыс")
+
+            if st.button("🖨️ Стикер алу (таңдалғандарға)", key=f"fbs_sticker_btn_{idx}", disabled=not selected_ids):
+                with st.spinner("Стикерлер алынуда..."):
+                    try:
+                        stickers = fetch_order_stickers(mp_key, selected_ids, sticker_type="png")
+                        st.session_state[f"fbs_stickers_{idx}"] = stickers
+                        st.success(f"✅ {len(stickers)} стикер алынды!")
+                    except Exception as e:
+                        st.error(f"Стикер алу қатесі: {e}")
+
+            stickers = st.session_state.get(f"fbs_stickers_{idx}", [])
+            if stickers:
+                zip_buf = stickers_to_zip(stickers)
+                st.download_button(
+                    "⬇️ Барлық стикерді ZIP түрінде жүктеу",
+                    data=zip_buf.getvalue(),
+                    file_name=f"stickers_{store['name']}.zip",
+                    mime="application/zip",
+                    key=f"fbs_zip_dl_{idx}",
+                )
+                cols = st.columns(4)
+                for i, s in enumerate(stickers):
+                    with cols[i % 4]:
+                        if s.get("file"):
+                            st.image(base64.b64decode(s["file"]), caption=f"orderId: {s.get('orderId')}")
+
+    # ---------- ҚАЛДЫҚТЫ ТЕКСЕРУ ----------
+    with sub2:
+        try:
+            warehouses = fetch_fbs_warehouses(mp_key)
+        except Exception as e:
+            st.error(f"Складтарды алу қатесі: {e}")
+            warehouses = []
+
+        if not warehouses:
+            st.info("Складтар табылмады")
+        else:
+            wh_names = [f"{w['name']} (ID: {w['id']})" for w in warehouses]
+            sel_wh = st.selectbox("Склад таңдаңыз", wh_names, key=f"fbs_wh_sel_{idx}")
+            wh_id = warehouses[wh_names.index(sel_wh)]["id"]
+
+            skus_input = st.text_area(
+                "Баркодтарды енгізіңіз (әр жолда біреу)",
+                key=f"fbs_skus_input_{idx}",
+                height=120,
+                placeholder="2037654321987\n2037654321988",
+            )
+
+            if st.button("🔍 Қалдықты тексеру", key=f"fbs_stock_check_{idx}"):
+                skus = [s.strip() for s in skus_input.split("\n") if s.strip()]
+                if not skus:
+                    st.warning("Ең болмаса бір баркод енгізіңіз")
+                else:
+                    with st.spinner("Тексерілуде..."):
+                        try:
+                            stocks = fetch_fbs_stocks(mp_key, wh_id, skus)
+                            if stocks:
+                                st.dataframe(pd.DataFrame(stocks), use_container_width=True)
+                            else:
+                                st.warning("Бұл баркодтар бойынша қалдық табылмады")
+                        except Exception as e:
+                            st.error(f"Қате: {e}")
+
+
 def ai_generate_reply(product_name, review_text, rating, reply_type="feedback", pros="", cons="", bables="", order_status=""):
     try:
         if reply_type == "feedback":
@@ -675,21 +991,17 @@ def show_sales_returns_tab(store):
     if load_sr:
         with st.spinner(f"[{name}] {sel_date} күнгі есеп..."):
             try:
-                # WB финанс отчет rr_dt (расчёт) күні бойынша сүзеді, сату күнінен кейін.
-                # Кең период: 3 күн артқа, 5 күн алға
                 target = sel_date.strftime("%Y-%m-%d")
                 d_from = (sel_date - timedelta(days=3)).strftime("%Y-%m-%d")
                 d_to = (sel_date + timedelta(days=5)).strftime("%Y-%m-%d")
                 wide = fetch_report_detail(use_key, d_from, d_to, store_name=name)
 
-                # sale_dt (сату күні) бойынша сүзу
                 rows = [r for r in (wide or []) if str(r.get("sale_dt", "") or "")[:10] == target]
                 st.session_state[sr_key] = rows or []
                 if rows:
                     st.success(f"✅ Загружено! ({len(rows)} операций)")
                 else:
                     st.warning(f"⚠️ {target} күні деректер табылмады.")
-                    # толық диагностика — бірінші жолдың барлық өрісі
                     if wide:
                         first = wide[0]
                         date_fields = {k: v for k, v in first.items() if "dt" in k.lower() or "date" in k.lower()}
@@ -711,14 +1023,13 @@ def show_sales_returns_tab(store):
         st.warning("Бұл күні деректер жоқ")
         return
 
-    # финанс API-ды артикул бойынша жинау (retail_amount = Продажа/реализация)
     agg = {}
     for row in raw:
         oper = str(row.get("supplier_oper_name", "")).strip().upper()
         sa = str(row.get("sa_name", "") or "").strip()
         nm = row.get("nm_id", "") or row.get("nmId", "") or ""
         qty = int(row.get("quantity", 0) or 0)
-        retail = float(row.get("retail_amount", 0) or 0)   # Продажа (реализация)
+        retail = float(row.get("retail_amount", 0) or 0)
         if not sa:
             continue
         if sa not in agg:
@@ -1122,12 +1433,10 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
     buhgalter = man.get("buhgalter", 0)
     upak_price = man.get("upak_price", 100)  # 1 шт-қа упаковка бағасы (менеджер қояды)
 
-    # ── Себестоимость (жалпы) ──
     tot_seb = sum(seb_data.get(a, 0) * by_article.get(a, {}).get("qty", 0) for a in by_article)
     tot_qty_sold = sum(by_article.get(a, {}).get("qty", 0) for a in by_article)
     upakovka = tot_qty_sold * upak_price
 
-    # ── Логистика до склада (АВТО — логистика до ВБ кестесінен) ──
     logistika = 0
     for art, d in by_article.items():
         qty_a = d.get("qty", 0)
@@ -1137,7 +1446,6 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
         if box_qty and box_qty > 0:
             logistika += (box_price / box_qty) * qty_a
 
-    # ── 1-ТАБЛИЦА (НДС/ИПН) ──
     vb_uslugi   = komissiya + vozmesh + logistic_wb + storage + ads + priemka
     vb_real_seb = realizacia - logistic_wb - tot_seb
     baza_ipn    = vb_real_seb - vb_uslugi
@@ -1147,16 +1455,11 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
     nds_vb      = vb_uslugi * r
     nash_nds    = obsh_nds - nds_post - nds_vb
 
-    # ── 2-ТАБЛИЦА (На пэй / Прибыль) ──
-    # На пэй-ден реклама (удержания) да шегеріледі — WB-ден нақты қолға тиетін сома
     napay  = for_pay - logistic_wb - storage - penalty - priemka - vozvrat * 2 - ads
-    # Реклама на пэйде шегерілген, сондықтан прибыльден ҚАЙТА алмаймыз (екі рет болмас үшін)
     pribyl = (napay - nash_nds - ipn - tot_seb
               - logistika - upakovka - samovykup - buhgalter)
     rent   = pribyl / napay if napay else 0
 
-    # ── ТАУАР БОЙЫНША (per-шт есеп) ──
-    # 1 шт-қа кететін жалпы шығын (рекламасыз — реклама тауарда жеке есептеледі)
     obshie = (logistic_wb + storage + penalty + priemka + vozvrat*2
               + nash_nds + ipn + buhgalter + samovykup)
     per_sht = obshie / total_qty if total_qty else 0
@@ -1169,24 +1472,18 @@ def compute_finance(fin, seb_data, logist_data, ads_by_art, man):
             continue
         fp_a = d.get("for_pay", 0)
         seb_per = seb_data.get(art, 0)
-        # логистика до ВБ (осы тауар)
         cfg = logist_data.get(art, {})
         box_price = cfg.get("box_price", 16000)
         box_qty   = cfg.get("box_qty", 0)
         logist_a  = (box_price / box_qty) * qty_a if box_qty and box_qty > 0 else 0
-        # вб получено
         vb_poluch = fp_a - per_sht * qty_a
-        # расходы = упаковка + логистика до ВБ
         upak_a  = qty_a * upak_price
         rashody = upak_a + logist_a
-        # себес
         seb_tot_a = seb_per * qty_a
-        # реклама: қолмен берілсе сол, әйтпесе жалпы рекламадан үлеспен (for_pay бойынша)
         if art in ads_by_art:
             reklama_a = ads_by_art.get(art, 0)
         else:
             reklama_a = ads * (fp_a / for_pay) if for_pay else 0
-        # прибыль
         profit_a = vb_poluch - rashody - seb_tot_a - reklama_a
         pct_a = profit_a / vb_poluch * 100 if vb_poluch else 0
         prod_rows.append({
@@ -1263,9 +1560,7 @@ def show_finance_tab(store, df):
 
     fin = st.session_state[fin_key]
 
-    # Қолмен енгізілетін (самовыкуп, бухгалтер, упаковка бағасы)
-    # Упаковка бағасы дүкенге тұрақты сақталады (обновлениеде жоғалмайды)
-    all_upak = load_json(SEBEST_FILE)  # SEBEST_FILE ішінде _upak кілтімен сақтаймыз
+    all_upak = load_json(SEBEST_FILE)
     saved_upak = all_upak.get(f"_upak_{idx}", 100)
     man_key = f"fin_manual_{idx}"
     if man_key not in st.session_state:
@@ -1274,19 +1569,16 @@ def show_finance_tab(store, df):
     if "upak_price" not in man:
         man["upak_price"] = saved_upak
 
-    # Реклама (қолмен, тауар бойынша)
     ads_key = f"ads_by_art_{idx}"
     if ads_key not in st.session_state:
         st.session_state[ads_key] = {}
     ads_by_art = st.session_state[ads_key]
 
-    # Сақталған деректер
     all_seb = load_json(SEBEST_FILE)
     seb_data = all_seb.get(str(idx), {})
     all_log = load_json(LOGISTIC_FILE)
     logist_data = all_log.get(str(idx), {})
 
-    # ЕСЕП
     m = compute_finance(fin, seb_data, logist_data, ads_by_art, man)
 
     def fmt(n): return f"{round(n):,} ₸".replace(",", " ")
@@ -1329,7 +1621,6 @@ def show_finance_tab(store, df):
             if (new_samo != man["samovykup"] or new_buh != man["buhgalter"]
                     or new_upak != man.get("upak_price", 100)):
                 st.session_state[man_key] = {"samovykup": new_samo, "buhgalter": new_buh, "upak_price": new_upak}
-                # упаковка бағасын тұрақты сақтау (обновлениеде жоғалмас үшін)
                 all_upak[f"_upak_{idx}"] = new_upak
                 save_json(SEBEST_FILE, all_upak)
                 st.rerun()
@@ -1363,7 +1654,6 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    # Excel
     buf = build_finance_excel(m, fin.get("by_article", {}), seb_data, logist_data, m["prod_rows"], m["log_rows"])
     period_str = f"{date_from.strftime('%d.%m')}-{date_to.strftime('%d.%m.%Y')}"
     st.download_button(f"⬇️ Скачать Excel — {store['name']} ({period_str})",
@@ -1372,7 +1662,6 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    # ЧИСТАЯ ПРИБЫЛЬ ПО ТОВАРАМ
     if m["prod_rows"]:
         with st.expander("📦 Чистая прибыль по товарам", expanded=True):
             prod_df = pd.DataFrame(m["prod_rows"])
@@ -1406,7 +1695,6 @@ def show_finance_tab(store, df):
 
     st.divider()
 
-    # СЕБЕСТОИМОСТЬ + ЛОГИСТИКА ДО ВБ (қатар)
     cL, cR = st.columns(2)
     with cL:
         with st.expander("🗂️ Себестоимость — по товарам", expanded=False):
@@ -1470,33 +1758,12 @@ def show_store(store, df, sales30, filter_status, search):
         st.warning("Нет данных или не загружено")
         return
 
-    tab_ostatok, tab_analytic, tab_finance, tab_sales, tab_feedback = st.tabs([
-        "📦 Остатки", "📊 Аналитика — 30 дней", "💰 Финансы", "📅 Ежедневный отчёт", "💬 Отзывы & Вопросы"
+    tab_ostatok, tab_fbs, tab_finance, tab_sales, tab_feedback = st.tabs([
+        "📦 Остатки", "🚚 FBS Заказы", "💰 Финансы", "📅 Ежедневный отчёт", "💬 Отзывы & Вопросы"
     ])
 
-    with tab_analytic:
-        if sales30 is None or sales30.empty:
-            st.info("Нет данных")
-        else:
-            total_qty = int(sales30["Заказ (шт)"].sum())
-            total_rev = sales30["Выручка (₸)"].sum()
-            avg_day = total_qty / 30
-            best_day = sales30.loc[sales30["Заказ (шт)"].idxmax()]
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("📦 Всего заказов", f"{total_qty:,} шт".replace(",", " "))
-            c2.metric("💰 Общая выручка", f"{total_rev:,.0f} ₸".replace(",", " "))
-            c3.metric("📈 Среднее в день", f"{avg_day:.1f} шт")
-            c4.metric("🏆 Лучший день", f"{best_day['Дата']} — {best_day['Заказ (шт)']} шт")
-            st.divider()
-            st.markdown("#### 📊 Заказы по дням (последние 30 дней)")
-            st.bar_chart(sales30.set_index("Дата")[["Заказ (шт)"]], height=300)
-            st.markdown("#### 💰 Выручка по дням")
-            st.line_chart(sales30.set_index("Дата")[["Выручка (₸)"]], height=250)
-            st.divider()
-            st.markdown("#### 📋 Таблица по дням")
-            disp = sales30.copy()
-            disp["Выручка (₸)"] = disp["Выручка (₸)"].round(0).astype(int)
-            st.dataframe(disp.sort_values("Дата", ascending=False).reset_index(drop=True), use_container_width=True, height=400)
+    with tab_fbs:
+        show_fbs_tab(store)
 
     with tab_finance:
         show_finance_tab(store, df)
@@ -1626,7 +1893,6 @@ with st.sidebar:
                     st.session_state.show_magkein = False
                     st.rerun()
         st.session_state.wb_prev_sel = _nav_sel
-        # MAGKEIN тек басты менеджерге
         if _role_now == "manager":
             st.divider()
             _mg_label = "✅ MAGKEIN — закрыть" if _mg_on else "📊 Отчёт MAGKEIN"
