@@ -253,7 +253,7 @@ def fetch_warehouse_remains(analytics_key):
         raise Exception("Превышен лимит запросов WB Analytics")
 
     task_id = r.json()["data"]["taskId"]
-    for _ in range(30):
+    for _ in range(60):
         time.sleep(5)
         r2 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/status",
                           headers={"Authorization": analytics_key}, timeout=30)
@@ -266,6 +266,8 @@ def fetch_warehouse_remains(analytics_key):
             break
         elif status in ["failed", "error"]:
             raise Exception(f"Ошибка задачи: {status}")
+    else:
+        raise Exception("Есеп генерациясы тым ұзаққа созылды (5 минуттан асты) — қайта «Загрузить все» басып көріңіз")
 
     for attempt in range(3):
         r3 = requests.get(f"{base}/api/v1/warehouse_remains/tasks/{task_id}/download",
