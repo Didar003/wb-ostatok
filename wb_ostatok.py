@@ -877,7 +877,38 @@ def show_cell_map_editor(store):
 EXPIRY_FILE = os.path.join(DATA_DIR, "expiry_data.json")
 DELIVERED_SUPPLIES_FILE = os.path.join(DATA_DIR, "delivered_supplies.json")
 CELL_MAP_FILE = os.path.join(DATA_DIR, "cell_map.json")
-PERSIST_FILES = PERSIST_FILES + ("expiry_data.json", "delivered_supplies.json", "cell_map.json")
+STORE_CACHE_FILE = os.path.join(DATA_DIR, "store_cache.json")
+PERSIST_FILES = PERSIST_FILES + ("expiry_data.json", "delivered_supplies.json", "cell_map.json", "store_cache.json")
+
+STORE_CACHE_TTL_HOURS = 3  # осы сағат ішінде "Загрузить все" қайта басудың қажеті жоқ
+
+
+def save_store_cache(idx, df, sales30):
+    all_cache = load_json(STORE_CACHE_FILE)
+    all_cache[str(idx)] = {
+        "df": df.to_dict(orient="records") if df is not None and not df.empty else [],
+        "sales30": sales30.to_dict(orient="records") if sales30 is not None and not sales30.empty else [],
+        "saved_at": datetime.now().isoformat(),
+    }
+    save_json(STORE_CACHE_FILE, all_cache)
+
+
+def load_store_cache(idx):
+    """TTL ішіндегі кэш болса (df, sales30, минут саны) қайтарады, әйтпесе None."""
+    all_cache = load_json(STORE_CACHE_FILE)
+    entry = all_cache.get(str(idx))
+    if not entry:
+        return None
+    try:
+        saved_at = datetime.fromisoformat(entry["saved_at"])
+    except Exception:
+        return None
+    age_hours = (datetime.now() - saved_at).total_seconds() / 3600
+    if age_hours > STORE_CACHE_TTL_HOURS:
+        return None
+    df = pd.DataFrame(entry.get("df", []))
+    sales30 = pd.DataFrame(entry.get("sales30", []))
+    return df, sales30, saved_at
 
 
 def fetch_all_orders(mp_key, limit=1000, next_id=0):
@@ -2535,6 +2566,7 @@ if fetch_btn:
         df, sales30, errors = load_store_data(s)
         st.session_state[f"df_{s['idx']}"] = df
         st.session_state[f"sales30_{s['idx']}"] = sales30
+        save_store_cache(s['idx'], df, sales30)
         for e in errors:
             st.warning(f"[{s['name']}] ⚠️ {e}")
     st.success("✅ Все магазины загружены!")
@@ -2733,7 +2765,15 @@ else:
     st.divider()
     _df_key = f"df_{_store['idx']}"
     if _df_key not in st.session_state or st.session_state[_df_key] is None:
-        st.info("👈 Нажмите **«Загрузить все»**")
+        _cached = load_store_cache(_store['idx'])
+        if _cached is not None:
+            _cdf, _csales30, _saved_at = _cached
+            st.session_state[_df_key] = _cdf
+            st.session_state[f"sales30_{_store['idx']}"] = _csales30
+            st.caption(f"🕒 Кэштен көрсетілуде — соңғы жаңарту {_saved_at.strftime('%d.%m.%Y %H:%M')} (жаңарту үшін «Загрузить все» басыңыз)")
+            show_store(_store, _cdf, _csales30, "Все", search)
+        else:
+            st.info("👈 Нажмите **«Загрузить все»**")
     else:
         _sales30 = st.session_state.get(f"sales30_{_store['idx']}", pd.DataFrame())
         show_store(_store, st.session_state[_df_key], _sales30, "Все", search)
