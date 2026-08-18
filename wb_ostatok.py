@@ -10,7 +10,7 @@ import os
 import base64
 import zipfile
 import hashlib
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
 
 st.set_page_config(page_title="Wildberries Отчёт", page_icon="📦", layout="wide")
@@ -995,6 +995,118 @@ def apply_expiration_to_supply(mp_key, order_ids, expiration_date, idx, store_ex
     return success, errors
 
 
+def render_picking_list_image(group_orders, group_label, width=900):
+    """Бір ячейка/ИП тобының лист подборасын кесте суреті ретінде салады (WB бермейді — өзіміз саламыз)."""
+    row_h = 32
+    header_h = 60
+    height = header_h + row_h * max(len(group_orders), 1) + 20
+
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+        font_b = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+    except Exception:
+        font = ImageFont.load_default()
+        font_b = font
+
+    draw.text((14, 12), f"Лист подбора — {group_label}", fill="black", font=font_b)
+    y = header_h
+    draw.text((14, y), "orderId", fill="black", font=font_b)
+    draw.text((240, y), "Артикул", fill="black", font=font_b)
+    draw.text((640, y), "Баркод", fill="black", font=font_b)
+    y += row_h
+    draw.line((0, y - 6, width, y - 6), fill=(180, 180, 180))
+
+    for o in group_orders:
+        barcode = o.get("skus", [""])[0] if o.get("skus") else ""
+        draw.text((14, y), str(o.get("id", "")), fill="black", font=font)
+        draw.text((240, y), str(o.get("article", ""))[:55], fill="black", font=font)
+        draw.text((640, y), str(barcode), fill="black", font=font)
+        y += row_h
+
+    return img
+
+
+def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map):
+    """
+    Ячейка/ИП тобы бойынша бір PDF құрайды:
+      1) Пропуск — WB API-ден алынған QR, ӨЗГЕРТУСІЗ
+      2) Стикерлер — WB API-ден алынған, ӨЗГЕРТУСІЗ
+      3) Лист подбора — WB бермейді, өзіміз саламыз
+    Барлығын ZIP-ке жинайды. Файл аты: "{ИП} {ячейка}-Ячейка {саны} заказ.pdf"
+    """
+    propusk_b64 = fetch_supply_barcode(mp_key, supply_id, "png")
+    propusk_bytes = base64.b64decode(propusk_b64) if propusk_b64 else None
+
+    order_ids = [o.get("id") for o in orders_in_supply]
+    stickers = fetch_order_stickers(mp_key, order_ids, sticker_type="png")
+    sticker_by_order = {s.get("orderId"): s.get("file") for s in stickers if s.get("file")}
+
+    grouped = {}
+    for o in orders_in_supply:
+        barcode = o.get("skus", [""])[0] if o.get("skus") else ""
+        cell_info = cell_map.get(str(barcode), {})
+        cell = cell_info.get("cell") or "белгісіз"
+        ip = cell_info.get("ip") or "Белгісіз"
+        grouped.setdefault((ip, cell), []).append(o)
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        for (ip, cell), group_orders in grouped.items():
+            writer = PdfWriter()
+
+            if propusk_bytes:
+                p_img = Image.open(io.BytesIO(propusk_bytes)).convert("RGB")
+                p_buf = io.BytesIO()
+                p_img.save(p_buf, format="PDF")
+                p_buf.seek(0)
+                for page in PdfReader(p_buf).pages:
+                    writer.add_page(page)
+
+            sticker_imgs = []
+            for o in group_orders:
+                fb64 = sticker_by_order.get(o.get("id"))
+                if fb64:
+                    sticker_imgs.append(Image.open(io.BytesIO(base64.b64decode(fb64))).convert("RGB"))
+            if sticker_imgs:
+                s_buf = io.BytesIO()
+                sticker_imgs[0].save(s_buf, format="PDF", save_all=True, append_images=sticker_imgs[1:])
+                s_buf.seek(0)
+                for page in PdfReader(s_buf).pages:
+                    writer.add_page(page)
+
+            list_img = render_picking_list_image(group_orders, f"{ip} / Ячейка {cell}")
+            l_buf = io.BytesIO()
+            list_img.save(l_buf, format="PDF")
+            l_buf.seek(0)
+            for page in PdfReader(l_buf).pages:
+                writer.add_page(page)
+
+            out_buf = io.BytesIO()
+            writer.write(out_buf)
+            out_buf.seek(0)
+
+            fname = f"{ip} {cell}-Ячейка {len(group_orders)} заказ.pdf".replace("/", "-")
+            zf.writestr(fname, out_buf.getvalue())
+
+    zip_buf.seek(0)
+    return zip_buf
+
+
+def trigger_browser_download(file_bytes, filename, mime="application/zip"):
+    """Жасырын <a download> сілтемесін JS арқылы автоматты басады — сол себепті
+    бір батырманы басқан сәтте файл бірден жүктеле бастайды (екінші басу керек емес)."""
+    b64 = base64.b64encode(file_bytes).decode()
+    html = f"""
+    <a id="auto_dl_link" href="data:{mime};base64,{b64}" download="{filename}" style="display:none"></a>
+    <script>
+        document.getElementById("auto_dl_link").click();
+    </script>
+    """
+    components.html(html, height=0)
+
+
 def show_fbs_tab(store):
     idx = store["idx"]
     mp_key = store.get("marketplace_key", "")
@@ -1308,55 +1420,18 @@ def show_fbs_tab(store):
                     rows = [{"orderId": o.get("id"), "Артикул": o.get("article", "")} for o in orders_in_supply]
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(300, 45 + len(rows) * 35), hide_index=True)
 
-                    pc1, pc2, pc3 = st.columns([1, 1, 1])
-                    with pc1:
-                        gen_propusk = st.button("🎫 Пропуск алу (WB API)", key=f"gen_propusk_{idx}_{sid}", use_container_width=True)
-                    with pc2:
-                        gen_list = st.button("📋 Лист подбора (Excel)", key=f"gen_list_{idx}_{sid}", use_container_width=True)
-                    with pc3:
-                        merge_btn = st.button("📄 Стикер+пропуск біріктіру (PDF)", key=f"merge_btn_{idx}_{sid}", use_container_width=True)
-
-                    if gen_propusk:
-                        try:
-                            propusk_b64 = fetch_supply_barcode(mp_key, sid, "png")
-                            st.session_state[f"propusk_{idx}_{sid}"] = propusk_b64
-                            st.success("✅ Пропуск алынды")
-                        except Exception as e:
-                            st.error(f"Қате: {e}")
-
-                    propusk_data = st.session_state.get(f"propusk_{idx}_{sid}")
-                    if propusk_data:
-                        st.image(base64.b64decode(propusk_data), caption="Пропуск (QR-код поставки)", width=200)
-
-                    if gen_list:
-                        list_buf = build_picking_list_excel(orders_in_supply, cell_map_current, supply_name=f"Поставка {sid}")
-                        st.session_state[f"picklist_{idx}_{sid}"] = list_buf.getvalue()
-
-                    picklist_data = st.session_state.get(f"picklist_{idx}_{sid}")
-                    if picklist_data:
-                        st.download_button("⬇️ Лист подбора (Excel) жүктеу", data=picklist_data,
-                                            file_name=f"list_podbora_{sid}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            key=f"picklist_dl_{idx}_{sid}")
-
-                    if merge_btn:
-                        with st.spinner("Стикерлер алынып, PDF құрастырылуда..."):
+                    if st.button(
+                        f"📦 Ячейка бойынша ZIP жасау және жүктеу ({len(orders_in_supply)} тапсырыс)",
+                        key=f"cell_zip_btn_{idx}_{sid}", use_container_width=True,
+                    ):
+                        with st.spinner("Пропуск пен стикерлер WB-ден алынып, лист подбора құрастырылуда..."):
                             try:
-                                order_ids_for_supply = [o.get("id") for o in orders_in_supply]
-                                stickers_d = fetch_order_stickers(mp_key, order_ids_for_supply, sticker_type="png")
-                                sticker_bytes_list = [base64.b64decode(s["file"]) for s in stickers_d if s.get("file")]
-                                propusk_for_merge = st.session_state.get(f"propusk_{idx}_{sid}")
-                                merged_buf = merge_stickers_propusk_pdf(sticker_bytes_list, propusk_for_merge)
-                                st.session_state[f"merged_pdf_{idx}_{sid}"] = merged_buf.getvalue()
-                                st.success("✅ PDF дайын")
+                                zip_buf = build_cell_documents_zip(mp_key, sid, orders_in_supply, cell_map_current)
+                                trigger_browser_download(zip_buf.getvalue(), f"{sid}_dokumenter.zip")
+                                st.success("✅ ZIP дайын — жүктеу автоматты басталды")
                             except Exception as e:
                                 st.error(f"Қате: {e}")
-
-                    merged_pdf_data = st.session_state.get(f"merged_pdf_{idx}_{sid}")
-                    if merged_pdf_data:
-                        st.download_button("⬇️ Стикер+пропуск PDF жүктеу", data=merged_pdf_data,
-                                            file_name=f"{sid}_stiker_propusk.pdf", mime="application/pdf",
-                                            key=f"merged_dl_{idx}_{sid}")
+                    st.caption("Пропуск пен стикер WB API-ден өзгертусіз алынады, лист подбораны сайт өзі құрастырады. Әр ячейка/ИП тобы бөлек файл болып ZIP-ке жиналады.")
                     st.divider()
 
     with sub2:
