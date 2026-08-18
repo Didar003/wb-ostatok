@@ -1028,13 +1028,31 @@ def render_picking_list_image(group_orders, group_label, width=900):
     return img
 
 
-def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map):
+def render_group_label_image(ip, cell, count, width=900, height=160):
+    """Топтың айдар (титул) бетін салады — қай ячейка/ИП екенін көрсету үшін."""
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    try:
+        font_b = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+    except Exception:
+        font_b = ImageFont.load_default()
+        font = font_b
+    draw.text((20, 30), f"{ip}  ·  Ячейка {cell}", fill="black", font=font_b)
+    draw.text((20, 75), f"{count} тапсырыс", fill=(90, 90, 90), font=font)
+    draw.line((0, height - 1, width, height - 1), fill=(200, 200, 200))
+    return img
+
+
+def build_cell_documents_pdf(mp_key, supply_id, orders_in_supply, cell_map, list_pdf_bytes=None):
     """
-    Ячейка/ИП тобы бойынша бір PDF құрайды:
-      1) Пропуск — WB API-ден алынған QR, ӨЗГЕРТУСІЗ
-      2) Стикерлер — WB API-ден алынған, ӨЗГЕРТУСІЗ
-      3) Лист подбора — WB бермейді, өзіміз саламыз
-    Барлығын ZIP-ке жинайды. Файл аты: "{ИП} {ячейка}-Ячейка {саны} заказ.pdf"
+    Барлық ячейка/ИП топтарын БІР PDF-ке біріктіреді (беттермен).
+    Әр ячейка үшін өз бөлімі болады:
+      1) айдар беті (ИП / Ячейка / тапсырыс саны)
+      2) пропуск — WB API-ден алынған QR, ӨЗГЕРТУСІЗ (әр ячейкада қайталанады)
+      3) стикерлер — WB API-ден алынған, ӨЗГЕРТУСІЗ
+      4) лист подбор — WB-дан жүктеп алынған PDF (list_pdf_bytes), әр ячейкада қайталанады.
+         Жүктелмесе, бұл бөлім қосылмайды.
     """
     propusk_b64 = fetch_supply_barcode(mp_key, supply_id, "png")
     propusk_bytes = base64.b64decode(propusk_b64) if propusk_b64 else None
@@ -1051,60 +1069,49 @@ def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map):
         ip = cell_info.get("ip") or "Белгісіз"
         grouped.setdefault((ip, cell), []).append(o)
 
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w") as zf:
-        for (ip, cell), group_orders in grouped.items():
-            writer = PdfWriter()
+    list_pages = list(PdfReader(io.BytesIO(list_pdf_bytes)).pages) if list_pdf_bytes else []
 
-            if propusk_bytes:
-                p_img = Image.open(io.BytesIO(propusk_bytes)).convert("RGB")
-                p_buf = io.BytesIO()
-                p_img.save(p_buf, format="PDF")
-                p_buf.seek(0)
-                for page in PdfReader(p_buf).pages:
-                    writer.add_page(page)
+    writer = PdfWriter()
 
-            sticker_imgs = []
-            for o in group_orders:
-                fb64 = sticker_by_order.get(o.get("id"))
-                if fb64:
-                    sticker_imgs.append(Image.open(io.BytesIO(base64.b64decode(fb64))).convert("RGB"))
-            if sticker_imgs:
-                s_buf = io.BytesIO()
-                sticker_imgs[0].save(s_buf, format="PDF", save_all=True, append_images=sticker_imgs[1:])
-                s_buf.seek(0)
-                for page in PdfReader(s_buf).pages:
-                    writer.add_page(page)
+    for (ip, cell), group_orders in grouped.items():
+        # --- айдар беті ---
+        label_img = render_group_label_image(ip, cell, len(group_orders))
+        lb_buf = io.BytesIO()
+        label_img.save(lb_buf, format="PDF")
+        lb_buf.seek(0)
+        for page in PdfReader(lb_buf).pages:
+            writer.add_page(page)
 
-            list_img = render_picking_list_image(group_orders, f"{ip} / Ячейка {cell}")
-            l_buf = io.BytesIO()
-            list_img.save(l_buf, format="PDF")
-            l_buf.seek(0)
-            for page in PdfReader(l_buf).pages:
+        # --- пропуск (осы ячейкаға арналған көшірме, өзгертусіз) ---
+        if propusk_bytes:
+            p_img = Image.open(io.BytesIO(propusk_bytes)).convert("RGB")
+            p_buf = io.BytesIO()
+            p_img.save(p_buf, format="PDF")
+            p_buf.seek(0)
+            for page in PdfReader(p_buf).pages:
                 writer.add_page(page)
 
-            out_buf = io.BytesIO()
-            writer.write(out_buf)
-            out_buf.seek(0)
+        # --- стикерлер (WB қайтарған қалпында, өзгертусіз) ---
+        sticker_imgs = []
+        for o in group_orders:
+            fb64 = sticker_by_order.get(o.get("id"))
+            if fb64:
+                sticker_imgs.append(Image.open(io.BytesIO(base64.b64decode(fb64))).convert("RGB"))
+        if sticker_imgs:
+            s_buf = io.BytesIO()
+            sticker_imgs[0].save(s_buf, format="PDF", save_all=True, append_images=sticker_imgs[1:])
+            s_buf.seek(0)
+            for page in PdfReader(s_buf).pages:
+                writer.add_page(page)
 
-            fname = f"{ip} {cell}-Ячейка {len(group_orders)} заказ.pdf".replace("/", "-")
-            zf.writestr(fname, out_buf.getvalue())
+        # --- лист подбор (WB-дан жүктеп алынған PDF, әр ячейкада қайталанады) ---
+        for page in list_pages:
+            writer.add_page(page)
 
-    zip_buf.seek(0)
-    return zip_buf
-
-
-def trigger_browser_download(file_bytes, filename, mime="application/zip"):
-    """Жасырын <a download> сілтемесін JS арқылы автоматты басады — сол себепті
-    бір батырманы басқан сәтте файл бірден жүктеле бастайды (екінші басу керек емес)."""
-    b64 = base64.b64encode(file_bytes).decode()
-    html = f"""
-    <a id="auto_dl_link" href="data:{mime};base64,{b64}" download="{filename}" style="display:none"></a>
-    <script>
-        document.getElementById("auto_dl_link").click();
-    </script>
-    """
-    components.html(html, height=0)
+    out_buf = io.BytesIO()
+    writer.write(out_buf)
+    out_buf.seek(0)
+    return out_buf
 
 
 def show_fbs_tab(store):
@@ -1420,18 +1427,39 @@ def show_fbs_tab(store):
                     rows = [{"orderId": o.get("id"), "Артикул": o.get("article", "")} for o in orders_in_supply]
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(300, 45 + len(rows) * 35), hide_index=True)
 
+                    list_upload = st.file_uploader(
+                        "Лист подбора (Wildberries-тен өзіңіз жүктеп алған PDF)",
+                        type=["pdf"], key=f"list_upload_{idx}_{sid}",
+                    )
+
                     if st.button(
-                        f"📦 Ячейка бойынша ZIP жасау және жүктеу ({len(orders_in_supply)} тапсырыс)",
-                        key=f"cell_zip_btn_{idx}_{sid}", use_container_width=True,
+                        f"📄 Ячейка бойынша PDF дайындау ({len(orders_in_supply)} тапсырыс)",
+                        key=f"cell_pdf_btn_{idx}_{sid}", use_container_width=True,
                     ):
-                        with st.spinner("Пропуск пен стикерлер WB-ден алынып, лист подбора құрастырылуда..."):
+                        with st.spinner("Пропуск пен стикерлер WB-ден алынуда..."):
                             try:
-                                zip_buf = build_cell_documents_zip(mp_key, sid, orders_in_supply, cell_map_current)
-                                trigger_browser_download(zip_buf.getvalue(), f"{sid}_dokumenter.zip")
-                                st.success("✅ ZIP дайын — жүктеу автоматты басталды")
+                                list_bytes = list_upload.read() if list_upload else None
+                                pdf_buf = build_cell_documents_pdf(mp_key, sid, orders_in_supply, cell_map_current, list_bytes)
+                                st.session_state[f"cell_pdf_data_{idx}_{sid}"] = pdf_buf.getvalue()
+                                if not list_bytes:
+                                    st.info("ℹ️ Лист подбора жүктелмегендіктен, PDF-те бұл бөлім жоқ")
+                                st.success("✅ PDF дайын — төмендегі түймеден сақтаңыз")
                             except Exception as e:
                                 st.error(f"Қате: {e}")
-                    st.caption("Пропуск пен стикер WB API-ден өзгертусіз алынады, лист подбораны сайт өзі құрастырады. Әр ячейка/ИП тобы бөлек файл болып ZIP-ке жиналады.")
+
+                    pdf_data = st.session_state.get(f"cell_pdf_data_{idx}_{sid}")
+                    if pdf_data:
+                        today_str = date.today().strftime("%d.%m.%Y")
+                        pdf_name = f"{sid} {today_str}.pdf"
+                        st.download_button(
+                            f"⬇️ Сақтау — {pdf_name}",
+                            data=pdf_data,
+                            file_name=pdf_name,
+                            mime="application/pdf",
+                            key=f"cell_pdf_dl_{idx}_{sid}",
+                            use_container_width=True,
+                        )
+                    st.caption("Пропуск пен стикер WB API-ден өзгертусіз алынады. Лист подбораны WB-дің өз бетінен жүктеп алып, жоғарыда қоясыз — ол әр ячейка бөліміне қосылады.")
                     st.divider()
 
     with sub2:
