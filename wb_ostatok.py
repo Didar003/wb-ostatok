@@ -1050,7 +1050,9 @@ def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map, list
       - Лист подбор.pdf — WB-дан жүктеп алынған PDF (list_pdf_bytes), әр ячейкада қайталанады
       - Пропуск.pdf — WB API-ден алынған QR, ӨЗГЕРТУСІЗ
       - Стикер.pdf — WB API-ден алынған, ӨЗГЕРТУСІЗ
-    Қалта аты: "{ИП} {Ячейка} {Дата}"
+    Қалта аты: "{ИП} {Ячейка}-Ячейка {Дата}"
+    Қайтарады: (zip_buf, zip_filename) — бір ғана ячейка болса, zip_filename сол
+    қалтаның атымен бірдей болады; бірнешеу болса, поставка ID пайдаланылады.
     """
     propusk_b64 = fetch_supply_barcode(mp_key, supply_id, "png")
     propusk_bytes = base64.b64decode(propusk_b64) if propusk_b64 else None
@@ -1068,11 +1070,13 @@ def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map, list
         grouped.setdefault((ip, cell), []).append(o)
 
     today_str = date.today().strftime("%d.%m.%Y")
+    folder_names = []
 
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         for (ip, cell), group_orders in grouped.items():
-            folder = f"{ip} {cell} {today_str}".replace("/", "-")
+            folder = f"{ip} {cell}-Ячейка {today_str}".replace("/", "-")
+            folder_names.append(folder)
 
             # --- Пропуск.pdf (WB API-ден, өзгертусіз) ---
             if propusk_bytes:
@@ -1097,7 +1101,14 @@ def build_cell_documents_zip(mp_key, supply_id, orders_in_supply, cell_map, list
                 zf.writestr(f"{folder}/Лист подбор.pdf", list_pdf_bytes)
 
     zip_buf.seek(0)
-    return zip_buf
+    if len(folder_names) == 1:
+        zip_filename = f"{folder_names[0]}.zip"
+    else:
+        unique_ips = {ip for (ip, cell) in grouped.keys()}
+        ip_part = unique_ips.pop() if len(unique_ips) == 1 else "_"
+        cells_part = ",".join(cell for (ip, cell) in grouped.keys())
+        zip_filename = f"{ip_part} {cells_part}-Ячейка {today_str}.zip".replace("/", "-")
+    return zip_buf, zip_filename
 
 
 def show_fbs_tab(store):
@@ -1425,8 +1436,9 @@ def show_fbs_tab(store):
                         with st.spinner("Пропуск пен стикерлер WB-ден алынуда..."):
                             try:
                                 list_bytes = list_upload.read() if list_upload else None
-                                zip_buf = build_cell_documents_zip(mp_key, sid, orders_in_supply, cell_map_current, list_bytes)
+                                zip_buf, zip_name = build_cell_documents_zip(mp_key, sid, orders_in_supply, cell_map_current, list_bytes)
                                 st.session_state[f"cell_zip_data_{idx}_{sid}"] = zip_buf.getvalue()
+                                st.session_state[f"cell_zip_name_{idx}_{sid}"] = zip_name
                                 if not list_bytes:
                                     st.info("ℹ️ Лист подбора жүктелмегендіктен, қалталарда бұл файл жоқ")
                                 st.success("✅ ZIP дайын — төмендегі түймеден сақтаңыз")
@@ -1435,8 +1447,7 @@ def show_fbs_tab(store):
 
                     zip_data = st.session_state.get(f"cell_zip_data_{idx}_{sid}")
                     if zip_data:
-                        today_str = date.today().strftime("%d.%m.%Y")
-                        zip_name = f"{sid} {today_str}.zip"
+                        zip_name = st.session_state.get(f"cell_zip_name_{idx}_{sid}", f"{sid}.zip")
                         st.download_button(
                             f"⬇️ Сақтау — {zip_name}",
                             data=zip_data,
